@@ -31,8 +31,8 @@ def run(state: AgentState) -> AgentState:
     cv_titles = ", ".join(cv["name"].replace("_", " ") for cv in cvs) or "product management, AI, data"
 
     try:
-        from providers.search.web_search import AnthropicWebSearchProvider
         from providers.llm.factory import build_llm
+        from providers.search.web_search import AnthropicWebSearchProvider
 
         llm = build_llm(cfg["llm"])
         search_provider = AnthropicWebSearchProvider(llm, cfg.get("search", {}))

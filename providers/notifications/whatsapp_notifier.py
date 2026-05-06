@@ -1,5 +1,6 @@
 """WhatsApp notifier — placeholder (requires Twilio or similar)."""
 import logging
+
 from providers.notifications.base import BaseNotifier
 
 logger = logging.getLogger(__name__)

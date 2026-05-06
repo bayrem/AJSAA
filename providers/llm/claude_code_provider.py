@@ -4,9 +4,9 @@ Uses `claude -p "<prompt>"` subprocess so all completions are billed
 against the user's Claude Pro/Max subscription — no Anthropic API credits needed.
 Requires the `claude` CLI to be installed and authenticated.
 """
+import logging
 import shutil
 import subprocess
-import logging
 from typing import Any, List, Optional
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -41,12 +41,13 @@ class ClaudeCodeChatModel(BaseChatModel):
         parts = []
         for msg in messages:
             role = getattr(msg, "type", "human")
+            content = str(msg.content)
             if role == "system":
-                parts.append(f"[System]\n{msg.content}")
+                parts.append(f"[System]\n{content}")
             elif role == "ai":
-                parts.append(f"[Assistant]\n{msg.content}")
+                parts.append(f"[Assistant]\n{content}")
             else:
-                parts.append(msg.content)
+                parts.append(content)
         return "\n\n".join(parts)
 
 

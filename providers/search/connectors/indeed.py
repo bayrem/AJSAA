@@ -1,5 +1,6 @@
 """Indeed connector — stub (RSS-based implementation planned)."""
 import logging
+
 from providers.search.connectors.base import BaseJobBoardConnector
 
 logger = logging.getLogger(__name__)

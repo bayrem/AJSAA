@@ -61,16 +61,20 @@ def _load_state(jobs_path: str) -> dict:
 
 
 def _send(channel: str, state: dict) -> None:
+    from typing import cast
+
     from agent.nodes.send_notifications import (
-        build_plain_message,
-        build_html_message,
         _CHANNEL_FORMATTER,
+        build_html_message,
+        build_plain_message,
     )
+    from agent.state import AgentState
     from providers.notifications.factory import build_notifier
 
+    typed_state = cast(AgentState, state)
     formatter = _CHANNEL_FORMATTER.get(channel, build_plain_message)
-    message = formatter(state)
-    html_body = build_html_message(state) if channel == "email" else None
+    message = formatter(typed_state)
+    html_body = build_html_message(typed_state) if channel == "email" else None
 
     notif_cfg = state["config"].get("notifications", {})
     notifier = build_notifier(channel, notif_cfg)
