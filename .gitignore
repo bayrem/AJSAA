@@ -1,0 +1,35 @@
+# Secrets & environment
+.env
+
+# Runtime data (hidden working dirs — never commit)
+.data/
+.docs/
+
+# IDE & tooling
+.venv/
+.claude/settings.json
+.claude/settings.local.json
+.vscode/
+
+# Logs
+logs/*.log
+
+# Python
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# OS
+.DS_Store
+
+# CV files (personal data)
+query/resume/*.md
+query/resume/*.pdf
+
+# OAuth tokens (auto-generated)
+.oauth_client.json
+.token.json
+
+# Future phases
+scoring_profiles/

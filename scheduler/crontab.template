@@ -1,0 +1,13 @@
+# AJSAA — Crontab Template
+# ─────────────────────────────────────────────────────────────────────────────
+# Add this to your crontab with: crontab -e
+# DO NOT set up until the full pipeline is validated end-to-end (Phase 7).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Option A: Run via Python directly (no Claude Code needed)
+# Runs nightly at 23:00
+0 23 * * * cd /home/brm/projects/AJSAA && /home/brm/projects/AJSAA/.venv/bin/python run.py >> logs/cron.log 2>&1
+
+# Option B: Run via Claude Code agent (includes Google Drive sync via MCP)
+# Runs nightly at 23:00
+# 0 23 * * * cd /home/brm/projects/AJSAA && claude --dangerously-skip-permissions -p "$(cat .claude/CLAUDE.md)" >> logs/cron.log 2>&1
