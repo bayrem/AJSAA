@@ -16,35 +16,51 @@ from providers.scoring.static_scorer import score_jobs_static
 logger = logging.getLogger(__name__)
 
 _EXTRACT_PROFILE_PROMPT = """\
-You just scored jobs against the CV below. Extract a reusable keyword scoring profile.
+You just scored jobs against the CV below. Now extract a keyword scoring profile that matches
+terms actually present in job descriptions — not the candidate's tech stack keywords.
 
-CV ({cv_name}):
+CV ({cv_name}) — use this to understand what kind of role we are targeting:
 {cv_content}
 
-Top and bottom scored jobs (for signal diversity):
-{jobs_sample}
+TOP-SCORING job descriptions (these should score 80-90 with your profile):
+{top_jobs}
 
-Output ONLY valid JSON with this exact schema — no preamble, no markdown:
+LOW-SCORING / filtered job descriptions (these should score < 70):
+{low_jobs}
+
+Output ONLY valid JSON — no preamble, no markdown:
 {{
   "cv": "{cv_name}",
   "cv_hash": "{cv_hash}",
   "positive_signals": [
-    {{"pattern": "regex_pattern", "weight": 20}}
+    {{"pattern": "regex_pattern", "weight": 15}}
   ],
   "negative_signals": [
     {{"pattern": "junior|internship|alternance", "weight": -50}}
   ],
   "domain_bonus": {{
-    "ai|ml|llm|genai": 15
+    "specific_term_from_top_jds": 8
   }},
-  "uncertainty_band": [60, 80]
+  "uncertainty_band": [65, 82]
 }}
 
-Rules:
-- 5-10 positive signals, 3-5 negative signals, 2-4 domain_bonus entries
-- Positive weights: 5-30. Negative weights: -50 to -5.
-- Patterns must be valid Python regex (use | for alternatives).
-- Base score is 50; a strong match should reach ~85.\
+KEY RULE — signals must match JOB DESCRIPTION language, not CV tech stack:
+  Look at the TOP-SCORING job texts above. What phrases actually appear in those JDs
+  that do NOT appear in LOW-SCORING ones? Those are your signals.
+  Examples of JD language that is specific: "plateforme de données", "data platform",
+  "intelligence artificielle en production", "cycle de vie", "gouvernance des données",
+  "time-to-market", "parcours produit data", "roadmap data".
+  Do NOT use CV backend terms (hadoop, kafka, airflow, gcp) as signals — they rarely
+  appear in PM job descriptions.
+
+CALIBRATION (sum of positive weights must be 40-55):
+  - A top-scoring JD matching 4-5 signals should reach 82-90.
+  - A generic "Chef de Produit IA" JD matching 1-2 signals should score 58-68.
+  - Individual weights: 8-18. domain_bonus: max 2 entries ≤ 8 each.
+
+NEGATIVE signals (3-5): junior|stagiaire|alternance, non-PM titles, pure commercial roles.
+Include both English and French variants where relevant (e.g. "junior|stagiaire|alternant").
+uncertainty_band: [65, 82]. Use 5-8 positive signals.\
 """
 
 
@@ -60,15 +76,22 @@ def _extract_profile(llm, cv: dict, scored_jobs: list[dict]) -> dict:
     """Distil a scoring profile from LLM bootstrap results."""
     cv_hash = content_hash(cv["content"])
     top = sorted(scored_jobs, key=lambda j: j.get("score", 0), reverse=True)
-    sample = (top[:5] + top[-5:]) if len(top) > 5 else top
-    jobs_sample = "\n".join(
-        f"- [{j.get('score', '?')}] {j.get('title', '')} @ {j.get('company', '')}: {j.get('summary', '')}"
-        for j in sample
-    )
+
+    def _jd_snippet(j: dict) -> str:
+        title = j.get("title", "")
+        company = j.get("company", "")
+        score = j.get("score", "?")
+        desc = j.get("description", "")[:300]
+        return f"[{score}] {title} @ {company}\n  {desc}"
+
+    top_jobs = "\n\n".join(_jd_snippet(j) for j in top[:4])
+    low_jobs  = "\n\n".join(_jd_snippet(j) for j in top[-3:]) if len(top) > 3 else "(none below threshold)"
+
     prompt = _EXTRACT_PROFILE_PROMPT.format(
         cv_name=cv["name"],
-        cv_content=cv["content"][:800],
-        jobs_sample=jobs_sample,
+        cv_content=cv["content"][:600],
+        top_jobs=top_jobs,
+        low_jobs=low_jobs,
         cv_hash=cv_hash,
     )
     try:
