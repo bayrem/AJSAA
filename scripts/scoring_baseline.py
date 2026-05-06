@@ -60,7 +60,7 @@ def compress_cv(llm, cv: dict) -> dict:
     return {"name": cv["name"], "content": compressed}
 
 
-def run_llm(llm, jobs, compressed_cvs, scoring_cfg) -> list[dict]:
+def run_llm(llm, jobs, compressed_cvs, scoring_cfg) -> dict:
     from agent.nodes.analyze_jobs import score_jobs_batch
     results = score_jobs_batch(llm, jobs, compressed_cvs, scoring_cfg)
     return {j["job_id"]: j["score"] for j in results}
