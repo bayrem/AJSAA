@@ -1,23 +1,13 @@
 """Score each job against all CV profiles. Keep jobs above min_score."""
 import json
 import logging
-from pathlib import Path
 
 from langchain_core.messages import HumanMessage
 
 from agent.state import AgentState
+from providers.scoring.cv_cache import get_or_compress
 
 logger = logging.getLogger(__name__)
-
-_PROMPT_PATH = Path("query/JOB_SCORING_PROMPT.md")
-_PROMPT_CACHE: str | None = None
-
-
-def _load_prompt() -> str:
-    global _PROMPT_CACHE
-    if _PROMPT_CACHE is None:
-        _PROMPT_CACHE = _PROMPT_PATH.read_text(encoding="utf-8").strip()
-    return _PROMPT_CACHE
 
 
 def _strip_fences(raw: str) -> str:
@@ -28,24 +18,6 @@ def _strip_fences(raw: str) -> str:
         if raw.startswith("json"):
             raw = raw[4:]
     return raw.strip()
-
-
-def compress_cv_for_matching(llm, cv_content: str) -> str:
-    """Compress a full CV down to the essentials needed for scoring (~600 tokens)."""
-    prompt = f"""Extract ONLY these facts from the CV below. Be EXTREMELY concise.
-
-CV:
-{cv_content}
-
-Output this exact format:
-YOE: X years
-Role: [current/most recent title]
-Skills: [comma-separated top 5 technical skills]
-Domain: [comma-separated top 3 domains]
-Metrics: [comma-separated top 3 quantified achievements]"""
-
-    response = llm.invoke([HumanMessage(content=prompt)])
-    return response.content.strip()
 
 
 def score_jobs_batch(llm, jobs: list[dict], compressed_cvs: list[dict],
@@ -65,7 +37,7 @@ def score_jobs_batch(llm, jobs: list[dict], compressed_cvs: list[dict],
         jobs_text = "\n\n".join(
             f"JOB {j}: {job.get('title', '')} at {job.get('company', '')}\n"
             f"Location: {job.get('location', '')}\n"
-            f"Desc: {job.get('description', '')[:500]}"
+            f"Desc: {job.get('description', '')[:300]}"
             for j, job in enumerate(batch)
         )
 
@@ -141,14 +113,13 @@ def run(state: AgentState) -> AgentState:
     from providers.llm.factory import build_llm
     llm = build_llm(cfg["llm"])
 
-    # Compress each CV once — reused across all batch calls
+    # Compress each CV — served from disk cache when CV is unchanged
     compressed_cvs = []
     for cv in cvs:
         try:
-            compressed = compress_cv_for_matching(llm, cv["content"])
+            compressed = get_or_compress(llm, cv)
             compressed_cvs.append({"name": cv["name"], "content": compressed})
             run_log.append(f"Compressed CV: {cv['name']}")
-            logger.info("Compressed CV '%s'", cv["name"])
         except Exception as e:
             errors.append(f"CV compression failed for '{cv['name']}': {e}")
             compressed_cvs.append(cv)  # fall back to full CV
