@@ -4,8 +4,9 @@ agent:
 
 llm:
   provider: claude_code_agent   # anthropic | openai | claude_code_agent
-  # model and max_tokens are ignored for claude_code_agent (claude CLI handles them)
-  model: claude-sonnet-4-6
+  scoring_model: claude-sonnet-4-6         # nuanced reasoning — job scoring
+  search_model: claude-haiku-4-5-20251001  # structured extraction — queries, CV compression, web search
+  default_model: claude-haiku-4-5-20251001
   max_tokens: 4096
   temperature: 0
   timeout: 120                  # seconds — used by claude_code_agent only
