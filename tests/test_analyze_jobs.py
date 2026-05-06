@@ -1,7 +1,7 @@
 """Tests for agent/nodes/analyze_jobs.py — focused on JD truncation and batch scoring."""
 from unittest.mock import MagicMock
 
-from agent.nodes.analyze_jobs import _strip_fences, score_jobs_batch
+from providers.scoring.llm_scorer import _strip_fences, score_jobs_batch
 
 
 def _make_llm(json_response: str) -> MagicMock:

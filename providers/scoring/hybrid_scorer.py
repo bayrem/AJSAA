@@ -10,6 +10,7 @@ import logging
 
 from langchain_core.messages import HumanMessage
 
+from providers.scoring.llm_scorer import score_jobs_batch
 from providers.scoring.profile_store import content_hash, load_profile, save_profile
 from providers.scoring.static_scorer import score_jobs_static
 
@@ -120,9 +121,6 @@ class HybridScorer:
         self.band_lo, self.band_hi = band[0], band[1]
 
     def score(self, jobs: list[dict]) -> list[dict]:
-        # Lazy import avoids circular dependency with analyze_jobs
-        from agent.nodes.analyze_jobs import score_jobs_batch
-
         # 1. Load profiles; collect CVs that need bootstrap
         profiles: dict[str, dict] = {}
         needs_bootstrap: list[dict] = []
