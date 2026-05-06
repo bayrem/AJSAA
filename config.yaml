@@ -4,8 +4,9 @@ agent:
 
 llm:
   provider: claude_code_agent   # anthropic | openai | claude_code_agent
-  # model and max_tokens are ignored for claude_code_agent (claude CLI handles them)
-  model: claude-sonnet-4-6
+  scoring_model: claude-sonnet-4-6         # nuanced reasoning — job scoring
+  search_model: claude-haiku-4-5-20251001  # structured extraction — queries, CV compression, web search
+  default_model: claude-haiku-4-5-20251001
   max_tokens: 4096
   temperature: 0
   timeout: 120                  # seconds — used by claude_code_agent only
@@ -56,9 +57,12 @@ search:
       max_queries: 5               # Cap at 5 queries to limit token consumption
 
 scoring:
+  mode: hybrid                  # llm | static | hybrid
   min_score: 70                 # Jobs below this score are discarded
   max_score: 95                 # Cap — avoids inflated "perfect" scores
   max_cvs: 5                    # Maximum number of CV profiles to load
+  uncertainty_band: [60, 80]    # hybrid: jobs in this range are re-scored by LLM
+  profiles_dir: scoring_profiles/  # hybrid/static: where per-CV profiles are stored
 
 storage:
   provider: local               # local | google_drive | onedrive | dropbox

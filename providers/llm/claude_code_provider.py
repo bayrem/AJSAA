@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 class ClaudeCodeChatModel(BaseChatModel):
     timeout: int = 120
     model_name: str = "claude_code_agent"
+    model: str = ""  # passed to --model flag when set
 
     @property
     def _llm_type(self) -> str:
@@ -34,7 +35,7 @@ class ClaudeCodeChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         prompt = self._messages_to_prompt(messages)
-        content = _invoke_claude_cli(prompt, timeout=self.timeout)
+        content = _invoke_claude_cli(prompt, timeout=self.timeout, model=self.model)
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content=content))])
 
     def _messages_to_prompt(self, messages: List[BaseMessage]) -> str:
@@ -51,7 +52,7 @@ class ClaudeCodeChatModel(BaseChatModel):
         return "\n\n".join(parts)
 
 
-def _invoke_claude_cli(prompt: str, timeout: int = 120, retries: int = 2) -> str:
+def _invoke_claude_cli(prompt: str, timeout: int = 120, retries: int = 2, model: str = "") -> str:
     claude_bin = shutil.which("claude")
     if not claude_bin:
         raise RuntimeError(
@@ -59,10 +60,14 @@ def _invoke_claude_cli(prompt: str, timeout: int = 120, retries: int = 2) -> str
             "Install Claude Code: https://claude.ai/code"
         )
 
+    cmd = [claude_bin, "--dangerously-skip-permissions", "-p", prompt]
+    if model:
+        cmd.extend(["--model", model])
+
     last_error: Exception = RuntimeError("No attempts made")
     for attempt in range(1, retries + 2):
         result = subprocess.run(
-            [claude_bin, "--dangerously-skip-permissions", "-p", prompt],
+            cmd,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -89,6 +94,7 @@ def _invoke_claude_cli(prompt: str, timeout: int = 120, retries: int = 2) -> str
 class ClaudeCodeProvider(BaseLLMProvider):
     def __init__(self, cfg: dict):
         self.timeout = cfg.get("timeout", 120)
+        self.model = cfg.get("model", "")
 
     def build(self) -> ClaudeCodeChatModel:
         claude_bin = shutil.which("claude")
@@ -97,5 +103,5 @@ class ClaudeCodeProvider(BaseLLMProvider):
                 "'claude' CLI not found in PATH. "
                 "Install Claude Code: https://claude.ai/code"
             )
-        logger.info("ClaudeCodeProvider: using claude CLI at %s", claude_bin)
-        return ClaudeCodeChatModel(timeout=self.timeout)
+        logger.info("ClaudeCodeProvider: using claude CLI at %s (model=%s)", claude_bin, self.model or "default")
+        return ClaudeCodeChatModel(timeout=self.timeout, model=self.model)
