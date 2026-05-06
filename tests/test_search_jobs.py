@@ -3,8 +3,6 @@ import time
 from threading import Semaphore
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from agent.nodes.search_jobs import (
     _filter_recent,
     _make_job_id,
@@ -12,7 +10,6 @@ from agent.nodes.search_jobs import (
     _run_parallel,
     _search_one,
 )
-
 
 # ── _parse_connector_cfg ──────────────────────────────────────────────────────
 
