@@ -14,20 +14,42 @@ A LangGraph-based agent that autonomously discovers, scores, and tracks job oppo
 
 ## Architecture
 
-```
-run.py
-  └── LangGraph Agent (agent/graph.py)
-        ├── load_context      reads CVs, queries, and company list
-        ├── convert_cvs       PDF → Markdown (if PDFs present)
-        ├── generate_queries  LLM generates queries from CVs (if no file)
-        ├── search_jobs       job board APIs + LLM fallback
-        ├── search_companies  career page search per listed company
-        ├── analyze_jobs      LLM scores jobs vs. CVs; keeps score ≥ threshold
-        ├── store_results     writes .data/jobs.json + optional cloud sync
-        └── send_notifications  email / Slack / Telegram / WhatsApp
+```mermaid
+flowchart TD
+    A([run.py]) --> B[load_context]
+    B --> C{PDFs in resume/?}
+    C -- yes --> D[convert_cvs]
+    C -- no  --> E{job_queries.md?}
+    D --> E
+    E -- no  --> F[generate_queries\nLLM → search strings]
+    E -- yes --> G[search_jobs\nFrance Travail · Adzuna · fallback]
+    F --> G
+    G --> H[search_companies\ncareer page search]
+    H --> I[analyze_jobs\nbatch LLM scoring]
+    I --> J[store_results\nlocal JSON + cloud sync]
+    J --> K{notifications\nenabled?}
+    K -- yes --> L[send_notifications\nTelegram · Slack · email]
+    K -- no  --> M([END])
+    L --> M
 ```
 
 Every provider is swappable via a single line in `config.yaml` — LLM, search connectors, storage backend, and notification channels all follow the same factory pattern.
+
+## Results so far
+
+Numbers from real pipeline runs against a senior product manager / data platform profile, Paris market:
+
+| Metric | Value |
+|---|---|
+| Jobs discovered per run | ~19 unique postings |
+| Jobs passing score threshold (≥ 70) | 15 |
+| Top match score | 92 / 95 |
+| Recommended to apply | 6 |
+| Worth considering | 9 |
+| Search queries run | 13 |
+| Duplicate entries across runs | 0 (content-hash deduplication) |
+
+Scoring uses a 0–95 scale (95 is capped to avoid inflated "perfect" scores). The LLM justifies each score in one sentence stored alongside the job record.
 
 ## Quick start
 
