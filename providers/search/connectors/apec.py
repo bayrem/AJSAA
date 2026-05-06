@@ -1,5 +1,6 @@
 """APEC (French executive job board) connector — stub."""
 import logging
+
 from providers.search.connectors.base import BaseJobBoardConnector
 
 logger = logging.getLogger(__name__)

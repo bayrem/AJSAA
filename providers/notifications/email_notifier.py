@@ -1,8 +1,8 @@
+import logging
 import os
 import smtplib
-import logging
-from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 from providers.notifications.base import BaseNotifier
 

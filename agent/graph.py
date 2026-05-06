@@ -1,14 +1,15 @@
-from langgraph.graph import StateGraph, END
+from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
-from agent.state import AgentState
-from agent.nodes.load_context import run as load_context
+from agent.nodes.analyze_jobs import run as analyze_jobs
 from agent.nodes.convert_cvs import run as convert_cvs
 from agent.nodes.generate_queries import run as generate_queries
-from agent.nodes.search_jobs import run as search_jobs
+from agent.nodes.load_context import run as load_context
 from agent.nodes.search_companies import run as search_companies
-from agent.nodes.analyze_jobs import run as analyze_jobs
-from agent.nodes.store_results import run as store_results
+from agent.nodes.search_jobs import run as search_jobs
 from agent.nodes.send_notifications import run as send_notifications
+from agent.nodes.store_results import run as store_results
+from agent.state import AgentState
 
 
 def _needs_convert_cvs(state: AgentState) -> str:
@@ -26,7 +27,7 @@ def _needs_notifications(state: AgentState) -> str:
     return END
 
 
-def build_graph() -> StateGraph:
+def build_graph() -> CompiledStateGraph:
     graph = StateGraph(AgentState)
 
     graph.add_node("load_context", load_context)

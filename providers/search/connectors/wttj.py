@@ -1,5 +1,6 @@
 """Welcome to the Jungle (WTTJ) connector — stub."""
 import logging
+
 from providers.search.connectors.base import BaseJobBoardConnector
 
 logger = logging.getLogger(__name__)

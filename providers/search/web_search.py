@@ -24,7 +24,7 @@ class AnthropicWebSearchProvider(BaseSearchProvider):
         self.llm = llm
         self.cfg = cfg
 
-    def search(self, query: str, max_results: int = 10, context: str = "") -> list[dict]:
+    def search(self, query: str, max_results: int = 10, context: str = "", **kwargs) -> list[dict]:
         from langchain_core.messages import HumanMessage
 
         context_hint = f"Focus on roles relevant to: {context}" if context else ""

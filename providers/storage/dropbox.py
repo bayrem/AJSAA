@@ -1,5 +1,6 @@
 """Dropbox storage — placeholder."""
 import logging
+
 from providers.storage.local import LocalJSONProvider
 
 logger = logging.getLogger(__name__)

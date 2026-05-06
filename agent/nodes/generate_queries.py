@@ -33,8 +33,9 @@ def run(state: AgentState) -> AgentState:
         return {**state, "queries": [], "errors": errors, "run_log": run_log}
 
     try:
-        from providers.llm.factory import build_llm
         from langchain_core.messages import HumanMessage
+
+        from providers.llm.factory import build_llm
 
         llm = build_llm(state["config"]["llm"])
 

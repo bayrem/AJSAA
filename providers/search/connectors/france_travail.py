@@ -6,12 +6,12 @@ Requires: FRANCE_TRAVAIL_CLIENT_ID, FRANCE_TRAVAIL_CLIENT_SECRET in .env
 Auth endpoint: POST https://entreprise.francetravail.fr/connexion/oauth2/access_token
 Search endpoint: GET https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search
 """
-import os
+import hashlib
 import json
 import logging
-import hashlib
-import urllib.request
+import os
 import urllib.parse
+import urllib.request
 from datetime import datetime, timedelta, timezone
 
 from providers.search.connectors.base import BaseJobBoardConnector

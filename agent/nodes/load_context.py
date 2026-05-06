@@ -48,8 +48,8 @@ def run(state: AgentState) -> AgentState:
     if QUERIES_FILE.exists():
         lines = QUERIES_FILE.read_text(encoding="utf-8").splitlines()
         raw_queries = [
-            l.strip() for l in lines
-            if l.strip() and not l.strip().startswith("#")
+            line.strip() for line in lines
+            if line.strip() and not line.strip().startswith("#")
         ]
         run_log.append(f"Loaded {len(raw_queries)} queries from {QUERIES_FILE}")
     else:
@@ -59,8 +59,8 @@ def run(state: AgentState) -> AgentState:
     if COMPANIES_FILE.exists():
         lines = COMPANIES_FILE.read_text(encoding="utf-8").splitlines()
         companies = [
-            l.strip() for l in lines
-            if l.strip() and not l.strip().startswith("#")
+            line.strip() for line in lines
+            if line.strip() and not line.strip().startswith("#")
         ]
         run_log.append(f"Loaded {len(companies)} companies from {COMPANIES_FILE}")
 

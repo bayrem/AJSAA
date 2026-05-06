@@ -3,12 +3,12 @@
 Free registration at https://developer.adzuna.com/
 Requires: ADZUNA_APP_ID, ADZUNA_APP_KEY in .env
 """
-import os
+import hashlib
 import json
 import logging
-import hashlib
-import urllib.request
+import os
 import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 
 from providers.search.connectors.base import BaseJobBoardConnector
