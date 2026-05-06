@@ -1,0 +1,74 @@
+agent:
+  name: AJSAA
+  version: "2.0.0"
+
+llm:
+  provider: claude_code_agent   # anthropic | openai | claude_code_agent
+  # model and max_tokens are ignored for claude_code_agent (claude CLI handles them)
+  model: claude-sonnet-4-6
+  max_tokens: 4096
+  temperature: 0
+  timeout: 120                  # seconds — used by claude_code_agent only
+
+search:
+  max_results_per_query: 10
+  enable_job_boards: true
+  enable_company_pages: true
+  # Connectors run in order. Each entry can be a plain name (string) or a config object.
+  # Object fields (all optional):
+  #   enabled: true/false          — set false to skip without removing from config
+  #   fallback_only: true/false    — only runs when all non-fallback connectors return 0 results
+  #   max_results_per_query: N     — overrides global max_results_per_query for this connector
+  #   max_queries: N               — run only the first N queries (saves tokens/API calls)
+  connectors:
+    # ── Real connectors (live data, no LLM tokens) ──────────────────────────
+    - name: france_travail         # Official French gov API — free at francetravail.io/data/api
+      enabled: true                # Requires: FRANCE_TRAVAIL_CLIENT_ID, FRANCE_TRAVAIL_CLIENT_SECRET
+      max_results_per_query: 10
+
+    - name: adzuna                 # Global aggregator, strong France coverage — free at developer.adzuna.com
+      enabled: true                # Requires: ADZUNA_APP_ID, ADZUNA_APP_KEY
+      max_results_per_query: 10
+
+    - name: indeed                 # Indeed FR — stub; RSS blocked, enable when connector implemented
+      enabled: false               # Requires: no auth (RSS) or INDEED_PUBLISHER_ID (Publisher API)
+      max_results_per_query: 10
+
+    - name: wttj                   # Welcome to the Jungle — stub; enable when working endpoint found
+      enabled: false               # No auth required once working endpoint confirmed
+      max_results_per_query: 10
+
+    - name: linkedin               # LinkedIn Jobs — stub; requires OAuth app approval
+      enabled: false               # Requires: LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET
+      max_results_per_query: 10
+
+    - name: apec                   # APEC (French exec board) — stub; requires auth
+      enabled: false               # Requires: session cookie or undocumented API reverse-engineering
+      max_results_per_query: 10
+
+    # ── LLM fallback (costs tokens — only fires when real connectors return nothing) ─
+    - name: anthropic_web
+      enabled: true
+      fallback_only: true          # Skipped automatically if any real connector returns results
+      max_results_per_query: 5
+      max_queries: 5               # Cap at 5 queries to limit token consumption
+
+scoring:
+  min_score: 70                 # Jobs below this score are discarded
+  max_score: 95                 # Cap — avoids inflated "perfect" scores
+  max_cvs: 5                    # Maximum number of CV profiles to load
+
+storage:
+  provider: local               # local | google_drive | onedrive | dropbox
+  local_path: .data/jobs.json
+  sheet_name: AJSAA Job Search
+
+notifications:
+  enabled: true
+  channels: [telegram]          # [email, slack, telegram, whatsapp]
+  email:
+    subject: "AJSAA — Job Search Report"
+
+logging:
+  level: INFO
+  file: logs/job_search.log
