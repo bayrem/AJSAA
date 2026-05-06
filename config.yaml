@@ -25,10 +25,12 @@ search:
     - name: france_travail         # Official French gov API — free at francetravail.io/data/api
       enabled: true                # Requires: FRANCE_TRAVAIL_CLIENT_ID, FRANCE_TRAVAIL_CLIENT_SECRET
       max_results_per_query: 10
+      max_concurrent: 3            # Respects their 3 req/s sustained rate limit
 
     - name: adzuna                 # Global aggregator, strong France coverage — free at developer.adzuna.com
       enabled: true                # Requires: ADZUNA_APP_ID, ADZUNA_APP_KEY
       max_results_per_query: 10
+      max_concurrent: 5            # No documented rate limit; conservative default
 
     - name: indeed                 # Indeed FR — stub; RSS blocked, enable when connector implemented
       enabled: false               # Requires: no auth (RSS) or INDEED_PUBLISHER_ID (Publisher API)
