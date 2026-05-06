@@ -124,9 +124,37 @@ def run(state: AgentState) -> AgentState:
             errors.append(f"CV compression failed for '{cv['name']}': {e}")
             compressed_cvs.append(cv)  # fall back to full CV
 
-    # Batch score all jobs
-    scored_jobs = score_jobs_batch(llm, raw_jobs, compressed_cvs, scoring_cfg, batch_size=10)
-    scored_jobs.sort(key=lambda j: j["score"], reverse=True)
+    mode = scoring_cfg.get("mode", "llm")
+    run_log.append(f"Scoring mode: {mode}")
+
+    if mode == "static":
+        from providers.scoring.profile_store import content_hash, load_profile
+        from providers.scoring.static_scorer import score_jobs_static
+        profiles_dir = scoring_cfg.get("profiles_dir", "scoring_profiles")
+        profiles = {}
+        for cv in cvs:
+            cv_hash = content_hash(cv["content"])
+            profile = load_profile(cv["name"], cv_hash, profiles_dir)
+            if profile is None:
+                errors.append(
+                    f"No valid scoring profile for '{cv['name']}' — "
+                    "run with mode: hybrid first to bootstrap"
+                )
+            else:
+                profiles[cv["name"]] = profile
+        if not profiles:
+            return {**state, "scored_jobs": [], "errors": errors, "run_log": run_log}
+        scored_jobs = score_jobs_static(raw_jobs, profiles, scoring_cfg)
+        scored_jobs.sort(key=lambda j: j["score"], reverse=True)
+
+    elif mode == "hybrid":
+        from providers.scoring.hybrid_scorer import HybridScorer
+        scorer = HybridScorer(llm, cvs, compressed_cvs, scoring_cfg)
+        scored_jobs = scorer.score(raw_jobs)
+
+    else:  # llm (default)
+        scored_jobs = score_jobs_batch(llm, raw_jobs, compressed_cvs, scoring_cfg, batch_size=10)
+        scored_jobs.sort(key=lambda j: j["score"], reverse=True)
 
     run_log.append(f"Analysis complete: {len(scored_jobs)}/{len(raw_jobs)} jobs passed threshold (≥{min_score})")
     logger.info("Analysis complete: %d/%d jobs above threshold", len(scored_jobs), len(raw_jobs))
