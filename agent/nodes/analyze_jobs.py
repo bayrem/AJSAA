@@ -111,13 +111,14 @@ def run(state: AgentState) -> AgentState:
         return {**state, "scored_jobs": [], "errors": errors, "run_log": run_log}
 
     from providers.llm.factory import build_llm
-    llm = build_llm(cfg["llm"])
+    search_llm = build_llm(cfg["llm"], task="search")    # cheap model for extraction
+    scoring_llm = build_llm(cfg["llm"], task="scoring")  # capable model for reasoning
 
     # Compress each CV — served from disk cache when CV is unchanged
     compressed_cvs = []
     for cv in cvs:
         try:
-            compressed = get_or_compress(llm, cv)
+            compressed = get_or_compress(search_llm, cv)
             compressed_cvs.append({"name": cv["name"], "content": compressed})
             run_log.append(f"Compressed CV: {cv['name']}")
         except Exception as e:
@@ -125,7 +126,7 @@ def run(state: AgentState) -> AgentState:
             compressed_cvs.append(cv)  # fall back to full CV
 
     # Batch score all jobs
-    scored_jobs = score_jobs_batch(llm, raw_jobs, compressed_cvs, scoring_cfg, batch_size=10)
+    scored_jobs = score_jobs_batch(scoring_llm, raw_jobs, compressed_cvs, scoring_cfg, batch_size=10)
     scored_jobs.sort(key=lambda j: j["score"], reverse=True)
 
     run_log.append(f"Analysis complete: {len(scored_jobs)}/{len(raw_jobs)} jobs passed threshold (≥{min_score})")

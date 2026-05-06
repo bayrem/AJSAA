@@ -127,7 +127,7 @@ def run(state: AgentState) -> AgentState:
     fallbacks = [c for c in enabled if c["fallback_only"]]
 
     from providers.llm.factory import build_llm
-    llm = build_llm(cfg["llm"])
+    llm = build_llm(cfg["llm"], task="search")
 
     # Run primary connectors in parallel
     raw_jobs.extend(_run_parallel(primary, queries, llm, search_cfg, run_log, errors))

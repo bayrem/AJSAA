@@ -37,7 +37,7 @@ def run(state: AgentState) -> AgentState:
 
         from providers.llm.factory import build_llm
 
-        llm = build_llm(state["config"]["llm"])
+        llm = build_llm(state["config"]["llm"], task="search")
 
         cv_summaries = "\n\n---\n\n".join(
             f"[{cv['name']}]\n{cv['content'][:2000]}" for cv in state["cvs"]
