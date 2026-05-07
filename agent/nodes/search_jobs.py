@@ -36,12 +36,13 @@ def _parse_connector_cfg(entry) -> dict:
     }
 
 
-def _search_one(provider, connector_name: str, query: str, max_results: int, semaphore: Semaphore):
+def _search_one(provider, connector_name: str, query: str, max_results: int,
+                semaphore: Semaphore, recency_days: int = 3):
     """Execute one (connector, query) pair under the connector's semaphore.
 
     Returns (results, log_message, error_message) — error_message is None on success.
     """
-    recent_query = f"{query} posted last week"
+    recent_query = f"{query} last {recency_days} days"
     with semaphore:
         try:
             results = provider.search(recent_query, max_results=max_results)
@@ -51,7 +52,7 @@ def _search_one(provider, connector_name: str, query: str, max_results: int, sem
 
 
 def _run_parallel(connector_cfgs: list[dict], queries: list[str], llm, search_cfg: dict,
-                  run_log: list, errors: list) -> list[dict]:
+                  run_log: list, errors: list, recency_days: int = 3) -> list[dict]:
     """Run all (connector, query) pairs in parallel with per-connector concurrency limits."""
     global_max_results = search_cfg.get("max_results_per_query", 10)
 
@@ -78,7 +79,7 @@ def _run_parallel(connector_cfgs: list[dict], queries: list[str], llm, search_cf
         max_q = cfg.get("max_queries")
         scoped_queries = queries[:max_q] if max_q else queries
         for query in scoped_queries:
-            tasks.append((providers[name], name, query, max_results, semaphores[name]))
+            tasks.append((providers[name], name, query, max_results, semaphores[name], recency_days))
 
     if not tasks:
         return []
@@ -86,8 +87,8 @@ def _run_parallel(connector_cfgs: list[dict], queries: list[str], llm, search_cf
     results: list[dict] = []
     with ThreadPoolExecutor(max_workers=min(len(tasks), 16)) as pool:
         futures = {
-            pool.submit(_search_one, provider, name, query, max_results, sem): (name, query)
-            for provider, name, query, max_results, sem in tasks
+            pool.submit(_search_one, provider, name, query, max_results, sem, recency_days): (name, query)
+            for provider, name, query, max_results, sem, recency_days in tasks
         }
         for future in as_completed(futures):
             connector_name, query = futures[future]
@@ -129,8 +130,10 @@ def run(state: AgentState) -> AgentState:
     from providers.llm.factory import build_llm
     llm = build_llm(cfg["llm"], task="search")
 
+    recency_days = search_cfg.get("recency_days", 3)
+
     # Run primary connectors in parallel
-    raw_jobs.extend(_run_parallel(primary, queries, llm, search_cfg, run_log, errors))
+    raw_jobs.extend(_run_parallel(primary, queries, llm, search_cfg, run_log, errors, recency_days))
 
     # Run fallback connectors only when primary connectors returned nothing
     if fallbacks:
@@ -140,7 +143,7 @@ def run(state: AgentState) -> AgentState:
             logger.info("Fallback connectors skipped: %s", skipped)
         else:
             run_log.append("Primary connectors returned 0 results — activating fallbacks")
-            raw_jobs.extend(_run_parallel(fallbacks, queries, llm, search_cfg, run_log, errors))
+            raw_jobs.extend(_run_parallel(fallbacks, queries, llm, search_cfg, run_log, errors, recency_days))
 
     # Filter stale jobs
     raw_jobs = _filter_recent(raw_jobs)
