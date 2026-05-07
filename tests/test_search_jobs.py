@@ -53,7 +53,7 @@ class TestSearchOne:
         sem = Semaphore(1)
         _search_one(provider, "c", "PM Paris", 5, sem)
         called_query = provider.search.call_args[0][0]
-        assert called_query.endswith("posted last week")
+        assert called_query.endswith("last 3 days")
 
     def test_provider_exception_returns_error(self):
         provider = MagicMock()
@@ -123,8 +123,8 @@ class TestRunParallel:
 
         assert len(results) == 2
         titles = {r["title"] for r in results}
-        assert "query1 posted last week" in titles
-        assert "query2 posted last week" in titles
+        assert "query1 last 3 days" in titles
+        assert "query2 last 3 days" in titles
         assert not errors
 
     def test_connector_init_failure_logged(self):

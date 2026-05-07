@@ -29,7 +29,8 @@ class AdzunaConnector(BaseJobBoardConnector):
             logger.warning("AdzunaConnector: credentials not set — skipping")
             return []
 
-        core_query = query.replace(" posted last week", "").strip()
+        recency_days = self.cfg.get("recency_days", 3)
+        core_query = query.split(" last ")[0].strip()
 
         params = urllib.parse.urlencode({
             "app_id": self.app_id,
@@ -38,7 +39,7 @@ class AdzunaConnector(BaseJobBoardConnector):
             "what": core_query,
             "where": "Paris",
             "sort_by": "date",
-            "max_days_old": 7,
+            "max_days_old": recency_days,
             "content-type": "application/json",
         })
         url = f"{_SEARCH_URL}?{params}"

@@ -71,9 +71,9 @@ class FranceTravailConnector(BaseJobBoardConnector):
             logger.error("FranceTravailConnector: auth failed: %s", e)
             return []
 
-        # Use only the core terms — France Travail free-text search is strict
-        core_query = query.replace(" posted last week", "").strip()
-        since = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        recency_days = self.cfg.get("recency_days", 3)
+        core_query = query.split(" last ")[0].strip()
+        since = (datetime.now(timezone.utc) - timedelta(days=recency_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         params = urllib.parse.urlencode({
             "motsCles": core_query,
