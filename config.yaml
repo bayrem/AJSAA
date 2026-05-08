@@ -14,6 +14,7 @@ llm:
 search:
   max_results_per_query: 10
   recency_days: 3               # Only return jobs posted within this many days
+  validate_urls: true           # HEAD-check each job URL before storing; drops 4xx responses
   enable_job_boards: true
   enable_company_pages: true
   # Connectors run in order. Each entry can be a plain name (string) or a config object.

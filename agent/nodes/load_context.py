@@ -1,5 +1,7 @@
 """Load CVs, queries, and companies from the query/ directory."""
+import json
 import logging
+import shutil
 from pathlib import Path
 
 from agent.state import AgentState
@@ -10,6 +12,24 @@ QUERY_DIR = Path("query")
 RESUME_DIR = QUERY_DIR / "resume"
 QUERIES_FILE = QUERY_DIR / "job_queries.md"
 COMPANIES_FILE = QUERY_DIR / "company_list.md"
+HINTS_CACHE_FILE = QUERY_DIR / "hints_cache.json"
+HINTS_EXAMPLE_FILE = QUERY_DIR / "hints_cache.example.json"
+
+
+def _load_hints_cache() -> dict:
+    """Load hints_cache.json, bootstrapping from the example file if absent."""
+    if not HINTS_CACHE_FILE.exists():
+        if HINTS_EXAMPLE_FILE.exists():
+            shutil.copy(HINTS_EXAMPLE_FILE, HINTS_CACHE_FILE)
+            logger.info("hints_cache.json created from example file")
+        else:
+            return {}
+    try:
+        raw = json.loads(HINTS_CACHE_FILE.read_text(encoding="utf-8"))
+        return {k: v for k, v in raw.items() if not k.startswith("_")}
+    except Exception as e:
+        logger.warning("Failed to load hints_cache.json: %s", e)
+        return {}
 
 
 def run(state: AgentState) -> AgentState:
@@ -31,7 +51,6 @@ def run(state: AgentState) -> AgentState:
             except Exception as e:
                 errors.append(f"Failed to load CV {md_file}: {e}")
 
-        # Collect PDFs for conversion
         for pdf_file in sorted(RESUME_DIR.glob("*.pdf")):
             pdf_paths.append(str(pdf_file))
             run_log.append(f"Queued PDF for conversion: {pdf_file.name}")
@@ -64,14 +83,19 @@ def run(state: AgentState) -> AgentState:
         ]
         run_log.append(f"Loaded {len(companies)} companies from {COMPANIES_FILE}")
 
-    logger.info("Context loaded: %d CVs, %d PDFs, %d queries, %d companies",
-                len(cvs), len(pdf_paths), len(raw_queries), len(companies))
+    # Load hints cache
+    company_hints = _load_hints_cache()
+    hint_count = sum(1 for c in companies if c in company_hints)
+    run_log.append(f"Hints cache: {hint_count}/{len(companies)} companies have hints")
+    logger.info("Context loaded: %d CVs, %d PDFs, %d queries, %d companies (%d hinted)",
+                len(cvs), len(pdf_paths), len(raw_queries), len(companies), hint_count)
 
     return {
         **state,
         "cvs": cvs,
         "raw_queries": raw_queries,
         "companies": companies,
+        "company_hints": company_hints,
         "pdf_paths": pdf_paths,
         "errors": errors,
         "run_log": run_log,
