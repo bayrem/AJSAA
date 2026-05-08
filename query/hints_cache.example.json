@@ -1,0 +1,17 @@
+{
+  "_comment": "Copy this file to hints_cache.json. Edit freely — hints_cache.json is gitignored.",
+  "_hint_format": {
+    "greenhouse:slug": "Greenhouse ATS — free public API, no auth",
+    "lever:slug":      "Lever ATS — free public API, no auth",
+    "ashby:slug":      "Ashby ATS — free public API, no auth",
+    "url:https://...": "Corporate career page discovered by AJSAA or set manually",
+    "none":            "No career page found — skip without retrying"
+  },
+
+  "Dataiku":    "greenhouse:dataiku",
+  "Mistral AI": "greenhouse:mistral",
+  "Mirakl":     "greenhouse:mirakl",
+  "Qonto":      "lever:qonto",
+  "Doctolib":   "lever:doctolib",
+  "Alan":       "ashby:alan"
+}

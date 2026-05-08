@@ -27,6 +27,9 @@ __pycache__/
 query/resume/*.md
 query/resume/*.pdf
 
+# Hints cache (personal — auto-generated, commit if you want to share)
+query/hints_cache.json
+
 # OAuth tokens (auto-generated)
 .oauth_client.json
 .token.json

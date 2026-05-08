@@ -41,6 +41,7 @@ def _build_initial_state(cfg: dict) -> dict:
         "cvs": [],
         "raw_queries": [],
         "companies": [],
+        "company_hints": {},
         "pdf_paths": [],
         "queries": [],
         "raw_jobs": [],
