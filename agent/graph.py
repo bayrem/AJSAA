@@ -1,3 +1,5 @@
+import logging
+
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
@@ -10,6 +12,22 @@ from agent.nodes.search_jobs import run as search_jobs
 from agent.nodes.send_notifications import run as send_notifications
 from agent.nodes.store_results import run as store_results
 from agent.state import AgentState
+
+logger = logging.getLogger(__name__)
+
+
+def _safe(node_fn, name: str):
+    """Wrap a node so an unhandled exception records to state instead of crashing the graph."""
+    def wrapper(state: AgentState) -> AgentState:
+        try:
+            return node_fn(state)
+        except Exception as exc:
+            logger.error("Node '%s' crashed: %s", name, exc, exc_info=True)
+            errors = list(state.get("errors", []))
+            errors.append(f"Node '{name}' crashed: {exc}")
+            return {**state, "errors": errors}
+    wrapper.__name__ = name
+    return wrapper
 
 
 def _needs_convert_cvs(state: AgentState) -> str:
@@ -30,14 +48,14 @@ def _needs_notifications(state: AgentState) -> str:
 def build_graph() -> CompiledStateGraph:
     graph = StateGraph(AgentState)
 
-    graph.add_node("load_context", load_context)
-    graph.add_node("convert_cvs", convert_cvs)
-    graph.add_node("generate_queries", generate_queries)
-    graph.add_node("search_jobs", search_jobs)
-    graph.add_node("search_companies", search_companies)
-    graph.add_node("analyze_jobs", analyze_jobs)
-    graph.add_node("store_results", store_results)
-    graph.add_node("send_notifications", send_notifications)
+    graph.add_node("load_context",      _safe(load_context,      "load_context"))
+    graph.add_node("convert_cvs",       _safe(convert_cvs,       "convert_cvs"))
+    graph.add_node("generate_queries",  _safe(generate_queries,  "generate_queries"))
+    graph.add_node("search_jobs",       _safe(search_jobs,       "search_jobs"))
+    graph.add_node("search_companies",  _safe(search_companies,  "search_companies"))
+    graph.add_node("analyze_jobs",      _safe(analyze_jobs,      "analyze_jobs"))
+    graph.add_node("store_results",     _safe(store_results,     "store_results"))
+    graph.add_node("send_notifications",_safe(send_notifications,"send_notifications"))
 
     graph.set_entry_point("load_context")
 
