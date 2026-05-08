@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Semaphore
 
 from agent.state import AgentState
+from providers.resilience import circuit_breaker
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +47,10 @@ def _search_one(provider, connector_name: str, query: str, max_results: int,
     with semaphore:
         try:
             results = provider.search(recent_query, max_results=max_results)
+            circuit_breaker.record_success(connector_name)
             return results, f"[{connector_name}] '{query}' → {len(results)} results", None
         except Exception as e:
+            circuit_breaker.record_failure(connector_name)
             return [], None, f"Search failed [{connector_name}] query='{query}': {e}"
 
 
@@ -61,6 +64,9 @@ def _run_parallel(connector_cfgs: list[dict], queries: list[str], llm, search_cf
     semaphores: dict[str, Semaphore] = {}
     for cfg in connector_cfgs:
         name = cfg["name"]
+        if circuit_breaker.is_open(name):
+            run_log.append(f"[circuit_breaker] '{name}' is open — skipped")
+            continue
         try:
             providers[name] = _get_search_provider(name, llm, search_cfg)
             limit = cfg.get("max_concurrent") or _DEFAULT_MAX_CONCURRENT.get(name, _FALLBACK_MAX_CONCURRENT)
