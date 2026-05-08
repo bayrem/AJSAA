@@ -12,6 +12,7 @@ class AgentState(TypedDict):
     cvs: list[dict]          # [{"name": str, "content": str, "path": str}]
     raw_queries: list[str]   # Lines from query/job_queries.md
     companies: list[str]     # Lines from query/company_list.md
+    company_hints: dict      # {company: hint} loaded from query/hints_cache.json
     pdf_paths: list[str]     # PDF files found in query/resume/
 
     # Generated
