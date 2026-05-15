@@ -70,7 +70,7 @@ class TestSearchOne:
         overlap_detected = []
         inside = []
 
-        def slow_search(query, max_results):
+        def slow_search(query, max_results=10, board=None, **kw):
             inside.append(1)
             if len(inside) > 1:
                 overlap_detected.append(True)
@@ -186,7 +186,7 @@ class TestRunParallel:
         """Wall-clock time with two slow connectors should be < 2× single connector time."""
         call_times: list[float] = []
 
-        def slow_search(query, max_results):
+        def slow_search(query, max_results=10, board=None, **kw):
             call_times.append(time.time())
             time.sleep(0.1)
             return [{"title": "job"}]
