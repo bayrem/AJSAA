@@ -188,7 +188,10 @@ def run(state: AgentState) -> AgentState:
 
 
 def _get_search_provider(name: str, llm, cfg: dict):
-    if name == "anthropic_web":
+    if name == "adaptive_web":
+        from providers.search.connectors.adaptive_web import AdaptiveWebSearchProvider
+        return AdaptiveWebSearchProvider(llm, cfg)
+    elif name == "anthropic_web":
         from providers.search.web_search import AnthropicWebSearchProvider
         return AnthropicWebSearchProvider(llm, cfg)
     elif name == "apec":

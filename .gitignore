@@ -30,9 +30,15 @@ query/resume/*.pdf
 # Hints cache (personal — auto-generated, commit if you want to share)
 query/hints_cache.json
 
+# Adaptive web search usage counters (runtime state, resets monthly)
+query/search_usage.json
+
 # OAuth tokens (auto-generated)
 .oauth_client.json
 .token.json
 
 # Future phases
 scoring_profiles/
+
+# IT Team automation session data
+.it-sessions/
