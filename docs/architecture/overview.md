@@ -6,7 +6,7 @@ AJSAA is a LangGraph pipeline. A single typed state object flows through eight n
 
 ```
 run.py
-  └─ build_graph().invoke(initial_state)
+  └─ build_graph().stream(initial_state)   # Rich TUI live; HTML report written on completion
         │
         ▼
   load_context          Read CVs, queries, company list from disk
@@ -25,7 +25,7 @@ run.py
   search_jobs           Query all enabled connectors in parallel
         │
         ▼
-  search_companies      LLM web-searches company career pages
+  search_companies      ATS HTTP fetch (Greenhouse/Lever/Ashby) or LLM for url: hints
         │
         ▼
   analyze_jobs          Compress CVs → score jobs → filter
