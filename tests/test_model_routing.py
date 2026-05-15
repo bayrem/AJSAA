@@ -4,7 +4,8 @@ from unittest.mock import MagicMock, patch
 from providers.llm.factory import build_llm
 
 
-def _cfg(extra: dict = {}) -> dict:
+def _cfg(extra: dict | None = None) -> dict:
+    extra = extra or {}
     return {
         "provider": "anthropic",
         "scoring_model": "claude-sonnet-4-6",
@@ -27,7 +28,8 @@ def _mock_provider(captured: list):
 
 
 class TestBuildLlmModelResolution:
-    def _build(self, task, cfg_extra={}):
+    def _build(self, task, cfg_extra: dict | None = None) -> str:
+        cfg_extra = cfg_extra or {}
         captured = []
         with patch("providers.llm.anthropic_provider.AnthropicProvider", _mock_provider(captured)):
             build_llm(_cfg(cfg_extra), task=task)
