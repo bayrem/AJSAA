@@ -51,10 +51,16 @@ search:
       enabled: false               # Requires: session cookie or undocumented API reverse-engineering
       max_results_per_query: 10
 
-    # ── LLM fallback (costs tokens — only fires when real connectors return nothing) ─
+    # ── Adaptive web search (Tavily → Brave → anthropic_web) ──────────────────
+    - name: adaptive_web
+      enabled: true                # Requires: TAVILY_API_KEY and/or BRAVE_SEARCH_API_KEY
+      monthly_limit: 950           # Per-provider threshold before switching (not a hard cap)
+      max_results_per_query: 5
+
+    # ── LLM fallback (costs tokens — only fires when all other connectors return nothing) ─
     - name: anthropic_web
       enabled: true
-      fallback_only: true          # Skipped automatically if any real connector returns results
+      fallback_only: true          # Skipped automatically if any non-fallback connector returns results
       max_results_per_query: 5
       max_queries: 5               # Cap at 5 queries to limit token consumption
 
