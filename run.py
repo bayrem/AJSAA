@@ -189,12 +189,9 @@ def main() -> None:
                     statuses[node_name] = "error" if new_err_count > prev_err_count else "done"
                     kpis_display[node_name] = _extract_kpis(node_name, updates)
                     node_timings[node_name] = elapsed
-                    try:
-                        next_idx = NODE_ORDER.index(node_name) + 1
-                        if next_idx < len(NODE_ORDER):
-                            statuses[NODE_ORDER[next_idx]] = "running"
-                    except ValueError:
-                        pass
+                    next_idx = NODE_ORDER.index(node_name) + 1
+                    if next_idx < len(NODE_ORDER):
+                        statuses[NODE_ORDER[next_idx]] = "running"
                 final_state.update(updates)
                 live.update(_make_dashboard(statuses, kpis_display, node_timings, run_id, ts))
 
