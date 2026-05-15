@@ -34,24 +34,27 @@ def _parse_connector_cfg(entry) -> dict:
         "max_results_per_query": entry.get("max_results_per_query"),  # None = use global
         "max_queries": entry.get("max_queries"),                      # None = all queries
         "max_concurrent": entry.get("max_concurrent"),                # None = use default
+        "target_boards": entry.get("target_boards"),                  # None = broad search (unchanged behaviour)
+        "max_queries_per_board": entry.get("max_queries_per_board"),  # None = use max_queries cap
     }
 
 
 def _search_one(provider, connector_name: str, query: str, max_results: int,
-                semaphore: Semaphore, recency_days: int = 3):
-    """Execute one (connector, query) pair under the connector's semaphore.
+                semaphore: Semaphore, recency_days: int = 3, board: str | None = None):
+    """Execute one (connector, query[, board]) triplet under the connector's semaphore.
 
     Returns (results, log_message, error_message) — error_message is None on success.
     """
     recent_query = f"{query} last {recency_days} days"
+    board_tag = f" [{board}]" if board else ""
     with semaphore:
         try:
-            results = provider.search(recent_query, max_results=max_results)
+            results = provider.search(recent_query, max_results=max_results, board=board)
             circuit_breaker.record_success(connector_name)
-            return results, f"[{connector_name}] '{query}' → {len(results)} results", None
+            return results, f"[{connector_name}]{board_tag} '{query}' → {len(results)} results", None
         except Exception as e:
             circuit_breaker.record_failure(connector_name)
-            return [], None, f"Search failed [{connector_name}] query='{query}': {e}"
+            return [], None, f"Search failed [{connector_name}]{board_tag} query='{query}': {e}"
 
 
 def _run_parallel(connector_cfgs: list[dict], queries: list[str], llm, search_cfg: dict,
@@ -75,7 +78,10 @@ def _run_parallel(connector_cfgs: list[dict], queries: list[str], llm, search_cf
             errors.append(f"Failed to initialise connector '{name}': {e}")
             logger.error("Failed to init connector '%s': %s", name, e)
 
-    # Build task list: one entry per (connector, query) pair
+    # Build task list: one entry per (connector, query[, board]) combination.
+    # When target_boards is set, each query is issued once per board with an optional
+    # per-board query cap (max_queries_per_board).  Without target_boards the behaviour
+    # is identical to the previous implementation.
     tasks: list[tuple] = []
     for cfg in connector_cfgs:
         name = cfg["name"]
@@ -83,9 +89,20 @@ def _run_parallel(connector_cfgs: list[dict], queries: list[str], llm, search_cf
             continue
         max_results = cfg.get("max_results_per_query") or global_max_results
         max_q = cfg.get("max_queries")
-        scoped_queries = queries[:max_q] if max_q else queries
-        for query in scoped_queries:
-            tasks.append((providers[name], name, query, max_results, semaphores[name], recency_days))
+        target_boards = cfg.get("target_boards") or []
+        max_q_per_board = cfg.get("max_queries_per_board")
+
+        if target_boards:
+            # Expand: one task per (query, board) pair
+            effective_max_q = min(max_q, max_q_per_board) if max_q and max_q_per_board else (max_q_per_board or max_q)
+            scoped_queries = queries[:effective_max_q] if effective_max_q else queries
+            for board in target_boards:
+                for query in scoped_queries:
+                    tasks.append((providers[name], name, query, max_results, semaphores[name], recency_days, board))
+        else:
+            scoped_queries = queries[:max_q] if max_q else queries
+            for query in scoped_queries:
+                tasks.append((providers[name], name, query, max_results, semaphores[name], recency_days, None))
 
     if not tasks:
         return []
@@ -93,8 +110,8 @@ def _run_parallel(connector_cfgs: list[dict], queries: list[str], llm, search_cf
     results: list[dict] = []
     with ThreadPoolExecutor(max_workers=min(len(tasks), 16)) as pool:
         futures = {
-            pool.submit(_search_one, provider, name, query, max_results, sem, recency_days): (name, query)
-            for provider, name, query, max_results, sem, recency_days in tasks
+            pool.submit(_search_one, provider, name, query, max_results, sem, recency_days, board): (name, query)
+            for provider, name, query, max_results, sem, recency_days, board in tasks
         }
         for future in as_completed(futures):
             connector_name, query = futures[future]

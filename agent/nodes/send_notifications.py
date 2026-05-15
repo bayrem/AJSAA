@@ -52,14 +52,14 @@ def build_html_message(state: AgentState) -> str:
     errors = state.get("errors", [])
     ts = state.get("timestamp") or datetime.utcnow().strftime("%Y-%m-%d")
 
-    rows = ""
+    row_parts: list[str] = []
     for j in top_jobs:
         raw_url = j.get("url", "")
-        safe_url = raw_url if raw_url.startswith(("https://", "http://")) else "#"
+        safe_url = html_mod.escape(raw_url) if raw_url.startswith(("https://", "http://")) else "#"
         title = html_mod.escape(j.get("title", ""))
         title_link = f'<a href="{safe_url}">{title}</a>' if safe_url != "#" else title
         badge_color = "#2e7d32" if j.get("score", 0) >= 80 else "#f57c00"
-        rows += (
+        row_parts.append(
             f"<tr>"
             f'<td style="padding:6px 10px;"><span style="background:{badge_color};color:#fff;border-radius:4px;padding:2px 6px;font-size:13px;">{j.get("score")}</span></td>'
             f'<td style="padding:6px 10px;">{title_link}</td>'
@@ -67,11 +67,13 @@ def build_html_message(state: AgentState) -> str:
             f'<td style="padding:6px 10px;">{html_mod.escape(j.get("recommendation",""))}</td>'
             f"</tr>"
         )
+    rows = "".join(row_parts)
 
     sheet_link = ""
     raw_sheet_url = state.get("sheet_url", "")
     if raw_sheet_url and raw_sheet_url.startswith(("https://", "http://")):
-        sheet_link = f'<p><a href="{raw_sheet_url}">Open Google Sheet →</a></p>'
+        escaped_sheet_url = html_mod.escape(raw_sheet_url)
+        sheet_link = f'<p><a href="{escaped_sheet_url}">Open Google Sheet →</a></p>'
     elif raw_sheet_url:
         sheet_link = f'<p>Google Sheet: {html_mod.escape(raw_sheet_url)}</p>'
 
