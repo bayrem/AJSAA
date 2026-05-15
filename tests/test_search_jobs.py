@@ -106,7 +106,7 @@ class TestRunParallel:
 
     def test_results_aggregated_across_queries(self):
         provider = MagicMock()
-        provider.search.side_effect = lambda q, max_results: [{"title": q}]
+        provider.search.side_effect = lambda q, max_results=10, board=None, **kw: [{"title": q}]
 
         run_log: list = []
         errors: list = []
