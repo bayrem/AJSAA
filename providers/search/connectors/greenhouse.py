@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_LOCATION_KEYWORDS = ["paris", "france", "remote", "télétravail", "hybrid", "île-de-france"]
 _BASE_URL = "https://boards-api.greenhouse.io/v1/boards/{slug}/jobs"
+_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9\-]*$")
 
 
 class GreenhouseConnector:
@@ -18,6 +19,9 @@ class GreenhouseConnector:
 
     def fetch(self, slug: str, location_keywords: list[str] | None = None) -> list[dict]:
         """Fetch all open jobs for company *slug* from Greenhouse."""
+        if not _SLUG_RE.match(slug):
+            logger.error("GreenhouseConnector: invalid slug '%s' — skipping", slug)
+            return []
         url = f"{_BASE_URL.format(slug=slug)}?content=true"
         keywords = location_keywords if location_keywords is not None else _DEFAULT_LOCATION_KEYWORDS
         try:

@@ -1,4 +1,5 @@
 """After-action HTML report generator for AJSAA runs."""
+import html as _html
 import json
 import re
 from datetime import datetime
@@ -32,15 +33,23 @@ def _strip_html(html: str) -> str:
     return re.sub(r"<[^>]+>", " ", html).strip()
 
 
+def _safe_url(url: str) -> str:
+    """Allow only http/https URLs; fall back to '#' for anything else (e.g. javascript:)."""
+    stripped = url.strip()
+    if stripped.startswith(("http://", "https://")):
+        return _html.escape(stripped, quote=True)
+    return "#"
+
+
 def _job_card_html(job: dict) -> str:
     score = job.get("score", 0)
-    rec = job.get("recommendation", "")
+    rec = _html.escape(job.get("recommendation", ""))
     color = _score_color(score)
-    title = job.get("title", "")
-    company = job.get("company", "")
-    location = job.get("location", "")
-    url = job.get("url", "#")
-    summary = job.get("summary", "")
+    title = _html.escape(job.get("title", ""))
+    company = _html.escape(job.get("company", ""))
+    location = _html.escape(job.get("location", ""))
+    url = _safe_url(job.get("url", ""))
+    summary = _html.escape(job.get("summary", ""))
     summary_p = f'<p style="margin:6px 0 0;font-size:13px;color:#495057;">{summary}</p>' if summary else ""
     return (
         '<div style="border:1px solid #dee2e6;border-radius:6px;padding:12px;margin-bottom:10px;">'
