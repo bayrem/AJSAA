@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 HINTS_CACHE_FILE = Path("query/hints_cache.json")
 
+_LOCATION_KEYWORDS = ["paris", "france", "remote", "télétravail", "hybrid", "île-de-france"]
+
 DISCOVER_PROMPT = """What is the careers/jobs page URL for {company}?
 Return only the URL (e.g. https://jobs.example.com), nothing else.
 If you are not confident, return the word UNKNOWN."""
@@ -62,22 +64,40 @@ def _discover_url(company: str, llm) -> str:
     return "none"
 
 
+def _ats_connector(ats_name: str, cfg: dict):
+    """Return the appropriate ATS connector instance, or None if unknown."""
+    if ats_name == "greenhouse":
+        from providers.search.connectors.greenhouse import GreenhouseConnector
+        return GreenhouseConnector(cfg)
+    if ats_name == "lever":
+        from providers.search.connectors.lever import LeverConnector
+        return LeverConnector(cfg)
+    if ats_name == "ashby":
+        from providers.search.connectors.ashby import AshbyConnector
+        return AshbyConnector(cfg)
+    return None
+
+
 def _search_with_hint(company: str, hint: str, llm, cfg: dict, cv_titles: str) -> list[dict]:
     """Execute search for a company given its routing hint."""
-    from providers.search.web_search import AnthropicWebSearchProvider
-
-    recency_days = cfg.get("search", {}).get("recency_days", 3)
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
     if hint.startswith(("greenhouse:", "lever:", "ashby:")):
-        ats_name = hint.split(":")[0].title()
-        slug = hint.split(":", 1)[1]
-        scope = f"the {ats_name} job board for company '{slug}'"
-    elif hint.startswith("url:"):
-        scope = hint[4:]
-    else:
+        ats_name, slug = hint.split(":", 1)
+        connector = _ats_connector(ats_name, cfg.get("search", {}))
+        if connector is None:
+            return []
+        results = connector.fetch(slug, location_keywords=_LOCATION_KEYWORDS)
+        for job in results:
+            job.setdefault("company", company)
+        return results
+
+    if not hint.startswith("url:"):
         return []
 
+    from providers.search.web_search import AnthropicWebSearchProvider
+
+    scope = hint[4:]
+    recency_days = cfg.get("search", {}).get("recency_days", 3)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     provider = AnthropicWebSearchProvider(llm, cfg.get("search", {}))
     prompt = SEARCH_PROMPT.format(
         today=today,

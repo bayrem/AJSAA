@@ -80,3 +80,5 @@ notifications:
 logging:
   level: INFO
   file: logs/job_search.log
+  rotation: none        # none | daily | per_run
+  retention: 7          # files/days to keep (per_run: file count; daily: day count)
