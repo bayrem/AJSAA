@@ -1,22 +1,31 @@
 """LLM provider that shells out to the Claude Code CLI.
 
-Routes every completion through ``claude -p "<prompt>"``. The advantage over
-``anthropic_provider`` is billing: completions go against the user's Claude
-Pro/Max subscription rather than the Anthropic API budget. No API key is
-required — just an authenticated ``claude`` CLI on the PATH.
+Routes every completion through ``claude -p "<prompt>" --output-format json``.
+The advantage over ``anthropic_provider`` is billing: completions go against
+the user's Claude Pro/Max subscription rather than the Anthropic API budget.
+No API key is required — just an authenticated ``claude`` CLI on the PATH.
 
 The provider exposes a custom ``ClaudeCodeChatModel`` that satisfies the
 LangChain ``BaseChatModel`` interface, so the rest of the codebase doesn't
 need to know it's not talking to a normal API model.
 
+The CLI is invoked with ``--output-format json`` so we can read structured
+error information (subtype, message) when a call fails. On rate-limit or
+other transient failure we retry with exponential backoff + jitter so a
+per-minute rate-limit window has time to refill before the next attempt.
+Authentication errors abort immediately because retrying won't help.
+
 Required setup:
   - ``claude`` CLI installed (https://claude.ai/code)
   - User authenticated (``claude /login``)
 """
+import json
 import logging
+import random
 import re
 import shutil
 import subprocess
+import time
 from typing import Any, List, Optional
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -31,6 +40,26 @@ logger = logging.getLogger(__name__)
 # Control character regex — same as in llm_scorer._sanitise. Kept identical
 # so prompts hashed across the two codepaths produce the same bytes.
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+# Per-attempt backoff schedule (seconds). Index 0 = wait before attempt 2,
+# index 1 = wait before attempt 3, etc. Tuned to the ~65s recovery window
+# observed for the Claude Code subscription's per-minute Sonnet rate limit
+# in issue #58 — three retries (5 + 15 + 45 = 65s) cover the worst case.
+_BACKOFF_SECONDS = (5.0, 15.0, 45.0)
+_JITTER_PCT = 0.2  # ±20% on each delay to avoid synchronised retry storms
+
+# Substrings (case-insensitive) we look for in CLI error messages to decide
+# whether to keep retrying. Auth errors are permanent — no point burning the
+# retry budget. Other errors are treated as transient by default.
+_AUTH_ERROR_HINTS = (
+    "authentication",
+    "unauthorized",
+    "invalid api key",
+    "auth_",
+    "login required",
+    "not logged in",
+)
 
 
 def _sanitise(text: str, max_chars: int = 2000) -> str:
@@ -93,6 +122,72 @@ class ClaudeCodeChatModel(BaseChatModel):
         return "\n\n".join(parts)
 
 
+def _backoff_seconds(attempt: int) -> float:
+    """Return seconds to sleep before the given attempt (1-indexed).
+
+    Attempt 1 has no wait. Attempts 2+ pull from ``_BACKOFF_SECONDS`` with
+    ±20% jitter. Attempts beyond the schedule reuse the last entry. Returns
+    0 for attempt 1 so callers can use a uniform ``if wait > 0: sleep(wait)``
+    pattern.
+    """
+    if attempt <= 1:
+        return 0.0
+    idx = min(attempt - 2, len(_BACKOFF_SECONDS) - 1)
+    base = _BACKOFF_SECONDS[idx]
+    jitter = base * _JITTER_PCT
+    return base + random.uniform(-jitter, jitter)
+
+
+def _parse_cli_response(
+    stdout: str, stderr: str, returncode: int
+) -> tuple[Optional[str], Optional[str], bool]:
+    """Inspect a completed CLI run and return ``(content, error_msg, is_auth_error)``.
+
+    - ``content``: the response text if the call succeeded; ``None`` on failure.
+    - ``error_msg``: human-readable failure description for logs; ``None`` on success.
+    - ``is_auth_error``: ``True`` if the CLI signalled a permanent auth problem —
+      the caller should not retry.
+
+    Resilience strategy: try JSON first (the canonical format with
+    ``--output-format json``). If JSON parsing fails — e.g. the CLI exited
+    before emitting any output, which is the rate-limit signature observed
+    in issue #58 — fall back to ``(returncode, stdout, stderr)`` heuristics.
+    """
+    data: Any = None
+    if stdout:
+        try:
+            data = json.loads(stdout)
+        except (json.JSONDecodeError, ValueError):
+            data = None
+
+    if isinstance(data, dict):
+        if not data.get("is_error", False):
+            result = data.get("result", "")
+            if isinstance(result, str) and result.strip():
+                return (result.strip(), None, False)
+            subtype = data.get("subtype") or "(none)"
+            return (None, f"CLI returned empty result (subtype={subtype})", False)
+
+        subtype = str(data.get("subtype") or data.get("error_type") or "unknown")
+        msg = str(data.get("error") or data.get("message") or "")
+        signal = f"{subtype} {msg}".lower()
+        is_auth = any(hint in signal for hint in _AUTH_ERROR_HINTS)
+        return (
+            None,
+            f"CLI error subtype={subtype} msg={msg or '(no message)'}",
+            is_auth,
+        )
+
+    # No JSON parsable from stdout — fall back to legacy text-mode interpretation.
+    # This path also covers the observed rate-limit case: exit code 1 with no
+    # output at all on either stream.
+    if returncode == 0 and stdout.strip():
+        return (stdout.strip(), None, False)
+
+    err_text = stderr.strip() or "(no output)"
+    return (None, f"CLI exited with code {returncode}: {err_text}", False)
+
+
 def _invoke_claude_cli(
     prompt: str,
     timeout: int = 120,
@@ -101,6 +196,11 @@ def _invoke_claude_cli(
     allow_tools: bool = True,
 ) -> str:
     """Run the ``claude`` CLI with a sanitised prompt; retry on transient failure.
+
+    Each call passes ``--output-format json`` so error information is recoverable
+    when the CLI fails. Transient failures (rate limit, empty output) are
+    retried with exponential backoff. Auth errors abort immediately because
+    retrying a permanent failure just burns the retry budget.
 
     Args:
         prompt: User prompt sent via ``-p``. Sanitised to strip control chars
@@ -115,10 +215,11 @@ def _invoke_claude_cli(
             or compression where tools aren't needed (faster, safer).
 
     Returns:
-        The stdout content from a successful CLI run.
+        The response text from a successful CLI run.
 
     Raises:
-        RuntimeError: If the CLI isn't on PATH, or every attempt fails.
+        RuntimeError: If the CLI isn't on PATH, every retry exhausts, or an
+            auth error is detected (no retries on auth errors).
     """
     claude_bin = shutil.which("claude")
     if not claude_bin:
@@ -133,31 +234,46 @@ def _invoke_claude_cli(
     cmd = [claude_bin]
     if allow_tools:
         cmd.append("--dangerously-skip-permissions")
-    cmd.extend(["-p", prompt])
+    cmd.extend(["-p", prompt, "--output-format", "json"])
     if model:
         cmd.extend(["--model", model])
 
+    total_attempts = retries + 1
     last_error: Exception = RuntimeError("No attempts made")
-    for attempt in range(1, retries + 2):
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
-        if result.returncode != 0:
-            # Non-zero exit — capture stderr and try again. Common causes:
-            # transient API throttling, auth token expiry.
-            last_error = RuntimeError(
-                f"claude CLI exited with code {result.returncode}:\n{result.stderr.strip()}"
+    for attempt in range(1, total_attempts + 1):
+        wait = _backoff_seconds(attempt)
+        if wait > 0:
+            logger.info(
+                "claude CLI: backing off %.1fs before attempt %d/%d",
+                wait, attempt, total_attempts,
             )
-            logger.warning("claude CLI attempt %d/%d failed: %s", attempt, retries + 1, last_error)
-            continue
+            time.sleep(wait)
 
-        content = result.stdout.strip()
-        if not content:
-            # Zero exit but no output — rare but seen during heavy load.
-            last_error = RuntimeError("claude CLI returned empty output")
-            logger.warning("claude CLI attempt %d/%d returned empty output", attempt, retries + 1)
-            continue
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
 
-        return content
+        content, err_msg, is_auth = _parse_cli_response(
+            result.stdout, result.stderr, result.returncode,
+        )
+
+        if content is not None:
+            return content
+
+        last_error = RuntimeError(err_msg or "claude CLI failed with unknown error")
+        logger.warning(
+            "claude CLI attempt %d/%d failed: %s", attempt, total_attempts, err_msg,
+        )
+
+        if is_auth:
+            logger.error(
+                "claude CLI auth error — aborting retries (run 'claude /login')",
+            )
+            raise last_error
 
     raise last_error
 
