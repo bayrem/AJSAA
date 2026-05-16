@@ -49,9 +49,18 @@ NODE_ORDER = [
 
 # ── KPI extraction (dispatch by node name) ───────────────────────────────────
 
+def _analyze_kpis(updates: dict) -> tuple[str, str]:
+    """KPI extractor for the analyze_jobs node — counts by recommendation."""
+    scored = updates.get("scored_jobs", [])
+    apply_n = sum(1 for j in scored if j.get("recommendation") == "APPLY")
+    consider_n = sum(1 for j in scored if j.get("recommendation") == "CONSIDER")
+    return (f"Passed: {len(scored)}", f"APPLY: {apply_n}  CONSIDER: {consider_n}")
+
+
 # Each entry returns ``(kpi1_label, kpi2_label)`` — the two-column summary
 # shown next to the node name in the live dashboard. Replaces an
-# if/elif chain.
+# if/elif chain. Most entries are inline lambdas because they're one-liners;
+# ``analyze_jobs`` is its own function because the logic doesn't fit on one line.
 _KPI_EXTRACTORS: dict[str, Callable[[dict], tuple[str, str]]] = {
     "load_context": lambda u: (
         f"CVs: {len(u.get('cvs', []))}",
@@ -61,21 +70,13 @@ _KPI_EXTRACTORS: dict[str, Callable[[dict], tuple[str, str]]] = {
     "generate_queries": lambda u: (f"Queries: {len(u.get('queries', []))}", ""),
     "search_jobs": lambda u: (f"Found: {len(u.get('raw_jobs', []))}", ""),
     "search_companies": lambda u: (f"Found: {len(u.get('raw_jobs', []))}", ""),
-    "analyze_jobs": lambda u: _analyze_kpis(u),
+    "analyze_jobs": _analyze_kpis,
     "store_results": lambda u: (f"New: {u.get('stored_count', 0)}", ""),
     "send_notifications": lambda u: (
         "Sent: yes" if u.get("notification_sent", False) else "Sent: no",
         "",
     ),
 }
-
-
-def _analyze_kpis(updates: dict) -> tuple[str, str]:
-    """KPI extractor for the analyze_jobs node — counts by recommendation."""
-    scored = updates.get("scored_jobs", [])
-    apply_n = sum(1 for j in scored if j.get("recommendation") == "APPLY")
-    consider_n = sum(1 for j in scored if j.get("recommendation") == "CONSIDER")
-    return (f"Passed: {len(scored)}", f"APPLY: {apply_n}  CONSIDER: {consider_n}")
 
 
 def _extract_kpis(node_name: str, updates: dict) -> tuple[str, str]:

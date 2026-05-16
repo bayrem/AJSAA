@@ -50,7 +50,10 @@ class AdaptiveWebSearchProvider(BaseSearchProvider):
     """Route a query to whichever web-search backend still has budget."""
 
     def __init__(self, llm, cfg: dict) -> None:
-        self.cfg = cfg
+        # ``BaseSearchProvider.__init__`` stores ``cfg`` on ``self.cfg``;
+        # we delegate to it so the contract is satisfied uniformly across
+        # every search provider.
+        super().__init__(cfg)
         self._llm = llm
 
         # The monthly request budget is configured per-connector in config.yaml,

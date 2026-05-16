@@ -93,8 +93,11 @@ class AnthropicWebSearchProvider(BaseSearchProvider):
     """Run web searches through the chat model's built-in web tool."""
 
     def __init__(self, llm, cfg: dict) -> None:
+        # Delegate cfg storage to BaseSearchProvider so the base contract is
+        # honoured. We keep ``self.llm`` as a separate attribute since the
+        # base class doesn't know about it.
+        super().__init__(cfg)
         self.llm = llm
-        self.cfg = cfg
 
     def search(
         self,
