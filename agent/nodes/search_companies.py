@@ -1,21 +1,34 @@
-"""Search career pages for companies in query/company_list.md.
+"""Search career pages for companies listed in ``query/company_list.md``.
 
-Routing priority per company:
-  1. hints_cache.json entry → ATS connector or URL-scoped web search
-  2. No entry → discover career page URL via one LLM call, persist to cache
-  3. hint == "none" → skip (discovery failed previously)
+Each company is routed via a hint stored in ``query/hints_cache.json``:
+
+  - ``"greenhouse:<slug>"`` / ``"lever:<slug>"`` / ``"ashby:<slug>"``
+        → call the ATS public API directly (no LLM, no scraping).
+  - ``"url:https://..."``
+        → run a focused web search prompted to look only at that URL.
+  - ``"none"``
+        → previous discovery failed; skip this company entirely.
+  - missing key
+        → call the LLM once to discover the career page URL, persist the
+          result so we never pay for that discovery again.
 """
-import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
 from agent.state import AgentState
+from providers.utils import JsonCache
 
 logger = logging.getLogger(__name__)
 
-HINTS_CACHE_FILE = Path("query/hints_cache.json")
 
+# ── Constants ────────────────────────────────────────────────────────────────
+
+HINTS_CACHE_FILE = Path("query/hints_cache.json")
+_HINTS_CACHE = JsonCache(HINTS_CACHE_FILE)
+
+# Keywords used to filter ATS results to the Paris / France / remote scope.
+# Anything not matching one of these is discarded by the connector.
 _LOCATION_KEYWORDS = ["paris", "france", "remote", "télétravail", "hybrid", "île-de-france"]
 
 DISCOVER_PROMPT = """What is the careers/jobs page URL for {company}?
@@ -38,17 +51,18 @@ Return [] if no relevant positions found. Return only the JSON array, nothing el
 
 
 def _save_hint(company: str, hint: str) -> None:
-    try:
-        cache: dict = {}
-        if HINTS_CACHE_FILE.exists():
-            raw = json.loads(HINTS_CACHE_FILE.read_text(encoding="utf-8"))
-            cache = {k: v for k, v in raw.items() if not k.startswith("_")}
-        cache[company] = hint
-        HINTS_CACHE_FILE.write_text(
-            json.dumps(cache, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
-    except Exception as e:
-        logger.warning("Failed to persist hint for '%s': %s", company, e)
+    """Persist a single hint, preserving the rest of the cache.
+
+    Underscore-prefixed keys (e.g. ``_comment``) in the cache file are example
+    annotations from ``hints_cache.example.json`` — they're stripped on read
+    so we don't accidentally treat them as company names.
+    """
+    raw = _HINTS_CACHE.load()
+    if not isinstance(raw, dict):
+        raw = {}
+    cache = {k: v for k, v in raw.items() if not k.startswith("_")}
+    cache[company] = hint
+    _HINTS_CACHE.save(cache)
 
 
 def _discover_url(company: str, llm) -> str:
@@ -65,17 +79,14 @@ def _discover_url(company: str, llm) -> str:
 
 
 def _ats_connector(ats_name: str, cfg: dict):
-    """Return the appropriate ATS connector instance, or None if unknown."""
-    if ats_name == "greenhouse":
-        from providers.search.connectors.greenhouse import GreenhouseConnector
-        return GreenhouseConnector(cfg)
-    if ats_name == "lever":
-        from providers.search.connectors.lever import LeverConnector
-        return LeverConnector(cfg)
-    if ats_name == "ashby":
-        from providers.search.connectors.ashby import AshbyConnector
-        return AshbyConnector(cfg)
-    return None
+    """Return the appropriate ATS connector instance, or ``None`` if unknown.
+
+    Delegates to :func:`providers.search.connectors.ats.build_ats_connector`
+    — the three previously separate connector classes (Greenhouse, Lever,
+    Ashby) now share one implementation parametrised by an ``AtsSpec``.
+    """
+    from providers.search.connectors.ats import build_ats_connector
+    return build_ats_connector(ats_name, cfg)
 
 
 def _search_with_hint(company: str, hint: str, llm, cfg: dict, cv_titles: str) -> list[dict]:

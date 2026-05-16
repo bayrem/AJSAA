@@ -1,7 +1,11 @@
 """Adzuna connector — global job aggregator with strong France coverage.
 
-Free registration at https://developer.adzuna.com/
-Requires: ADZUNA_APP_ID, ADZUNA_APP_KEY in .env
+Free registration at https://developer.adzuna.com/ — provides 1000 requests
+per day on the free tier, which is more than enough for daily runs.
+
+Required environment variables (see ``.env.template``):
+  - ``ADZUNA_APP_ID``
+  - ``ADZUNA_APP_KEY``
 """
 import hashlib
 import json
@@ -11,30 +15,39 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
-from providers.search.connectors.base import BaseJobBoardConnector
+from providers.search.base import BaseSearchProvider
 
 logger = logging.getLogger(__name__)
 
+
+# /fr/ in the path scopes results to France. Change the country code to use
+# Adzuna in other regions (see https://api.adzuna.com/v1/doc/).
 _SEARCH_URL = "https://api.adzuna.com/v1/api/jobs/fr/search/1"
 
 
-class AdzunaConnector(BaseJobBoardConnector):
-    def __init__(self, cfg: dict):
+class AdzunaConnector(BaseSearchProvider):
+    """Connector for the Adzuna public job aggregator."""
+
+    def __init__(self, cfg: dict) -> None:
         super().__init__(cfg)
         self.app_id = os.environ.get("ADZUNA_APP_ID", "")
         self.app_key = os.environ.get("ADZUNA_APP_KEY", "")
 
     def search(self, query: str, max_results: int = 10, **kwargs) -> list[dict]:
+        """Issue one Adzuna search and return canonical job dicts."""
         if not self.app_id or not self.app_key:
             logger.warning("AdzunaConnector: credentials not set — skipping")
             return []
 
         recency_days = self.cfg.get("recency_days", 3)
+        # Strip the " last N days" suffix added upstream — Adzuna has its own
+        # max_days_old parameter.
         core_query = query.split(" last ")[0].strip()
 
         params = urllib.parse.urlencode({
             "app_id": self.app_id,
             "app_key": self.app_key,
+            # Adzuna caps at 50 results per page on the free tier
             "results_per_page": min(max_results, 50),
             "what": core_query,
             "where": "Paris",
@@ -52,13 +65,16 @@ class AdzunaConnector(BaseJobBoardConnector):
             logger.error("AdzunaConnector: search failed for '%s': %s", query, e)
             return []
 
-        jobs = []
+        jobs: list[dict] = []
         for item in data.get("results", []):
             title = item.get("title", "")
             company = item.get("company", {}).get("display_name", "")
             location = item.get("location", {}).get("display_name", "Paris, France")
             url_job = item.get("redirect_url", "")
             description = item.get("description", "")
+            # Content-address the job id using a stable shape — title +
+            # company + Adzuna's own id (id alone is not strictly globally
+            # unique across mirrored postings).
             job_id = hashlib.sha256(
                 f"{title}|{company}|{item.get('id', '')}".lower().encode()
             ).hexdigest()[:16]

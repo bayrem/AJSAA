@@ -15,14 +15,14 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
-from providers.search.connectors.base import BaseJobBoardConnector
+from providers.search.base import BaseSearchProvider
 
 logger = logging.getLogger(__name__)
 
 _FEED_URL = "https://jobsfeed.example.com/rss"
 
 
-class JobsFeedConnector(BaseJobBoardConnector):
+class JobsFeedConnector(BaseSearchProvider):
     def __init__(self, cfg: dict):
         super().__init__(cfg)          # stores cfg as self.cfg
         self.api_key = os.environ.get("JOBSFEED_API_KEY", "")
@@ -85,13 +85,25 @@ Key rules:
 
 ## 2. Register in the search factory
 
-Open `agent/nodes/search_jobs.py` and add a branch to `_get_search_provider`:
+Open `agent/nodes/search_jobs.py` and add a builder + register it in the
+dispatch dict inside `_get_search_provider`:
 
 ```python
-elif name == "jobsfeed":
+def _make_jobsfeed(cfg):
     from providers.search.connectors.jobsfeed import JobsFeedConnector
     return JobsFeedConnector(cfg)
+
+
+def _get_search_provider(name: str, llm, cfg: dict):
+    builders = {
+        # ...existing entries...
+        "jobsfeed": lambda: _make_jobsfeed(cfg),
+    }
+    ...
 ```
+
+Keeping the import inside the small `_make_*` helper preserves the lazy-load
+pattern — unused connectors never pay for their dependencies.
 
 Optionally add a default concurrency limit:
 

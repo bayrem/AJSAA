@@ -1,4 +1,17 @@
-"""Load CVs, queries, and companies from the query/ directory."""
+"""Load CVs, queries, companies, and hints from the ``query/`` directory.
+
+This is the first node in the pipeline. It owns all filesystem I/O for the
+user-managed inputs: every other node receives its data via the graph state
+and never reads from disk directly (except for caches and outputs).
+
+Behaviour notes:
+  - MD CVs are loaded directly. PDF CVs are queued for the convert_cvs node
+    rather than parsed here, so this node stays IO-light.
+  - When ``hints_cache.json`` is missing we bootstrap from
+    ``hints_cache.example.json`` so first-run users get useful defaults.
+  - Comment lines (``#``) and blank lines are stripped from the query and
+    company markdown files.
+"""
 import json
 import logging
 import shutil
@@ -8,6 +21,9 @@ from agent.state import AgentState
 
 logger = logging.getLogger(__name__)
 
+
+# ── File paths ───────────────────────────────────────────────────────────────
+
 QUERY_DIR = Path("query")
 RESUME_DIR = QUERY_DIR / "resume"
 QUERIES_FILE = QUERY_DIR / "job_queries.md"
@@ -16,8 +32,15 @@ HINTS_CACHE_FILE = QUERY_DIR / "hints_cache.json"
 HINTS_EXAMPLE_FILE = QUERY_DIR / "hints_cache.example.json"
 
 
+# ── Hints cache ──────────────────────────────────────────────────────────────
+
 def _load_hints_cache() -> dict:
-    """Load hints_cache.json, bootstrapping from the example file if absent."""
+    """Load the hints cache, bootstrapping from the example file on first run.
+
+    Underscore-prefixed keys (e.g. ``_comment``) in the example file are
+    documentation annotations; we strip them so they never get treated as
+    company names by downstream code.
+    """
     if not HINTS_CACHE_FILE.exists():
         if HINTS_EXAMPLE_FILE.exists():
             shutil.copy(HINTS_EXAMPLE_FILE, HINTS_CACHE_FILE)
@@ -28,11 +51,26 @@ def _load_hints_cache() -> dict:
         raw = json.loads(HINTS_CACHE_FILE.read_text(encoding="utf-8"))
         return {k: v for k, v in raw.items() if not k.startswith("_")}
     except Exception as e:
+        # Corrupt cache shouldn't break the run — start with no hints
         logger.warning("Failed to load hints_cache.json: %s", e)
         return {}
 
 
+# ── Markdown-list helpers ────────────────────────────────────────────────────
+
+def _read_md_list(path: Path) -> list[str]:
+    """Read a markdown file as a list of non-blank, non-comment lines."""
+    return [
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+
+# ── Graph node ───────────────────────────────────────────────────────────────
+
 def run(state: AgentState) -> AgentState:
+    """Populate every input-layer field on the agent state."""
     errors = list(state.get("errors", []))
     run_log = list(state.get("run_log", []))
 
@@ -41,7 +79,7 @@ def run(state: AgentState) -> AgentState:
     companies: list[str] = []
     pdf_paths: list[str] = []
 
-    # Load MD CVs
+    # ── CVs (MD loaded immediately, PDF queued for the next node) ───────────
     if RESUME_DIR.exists():
         for md_file in sorted(RESUME_DIR.glob("*.md")):
             try:
@@ -52,9 +90,11 @@ def run(state: AgentState) -> AgentState:
                 errors.append(f"Failed to load CV {md_file}: {e}")
 
         for pdf_file in sorted(RESUME_DIR.glob("*.pdf")):
+            # Don't parse PDFs here — that's convert_cvs's job.
             pdf_paths.append(str(pdf_file))
             run_log.append(f"Queued PDF for conversion: {pdf_file.name}")
 
+    # Cap CVs at max_cvs to keep prompt sizes predictable
     max_cvs = state["config"].get("scoring", {}).get("max_cvs", 5)
     if len(cvs) > max_cvs:
         cvs = cvs[:max_cvs]
@@ -63,32 +103,27 @@ def run(state: AgentState) -> AgentState:
     if not cvs and not pdf_paths:
         errors.append("No CVs found in query/resume/. Add .md or .pdf files.")
 
-    # Load queries
+    # ── Queries ─────────────────────────────────────────────────────────────
     if QUERIES_FILE.exists():
-        lines = QUERIES_FILE.read_text(encoding="utf-8").splitlines()
-        raw_queries = [
-            line.strip() for line in lines
-            if line.strip() and not line.strip().startswith("#")
-        ]
+        raw_queries = _read_md_list(QUERIES_FILE)
         run_log.append(f"Loaded {len(raw_queries)} queries from {QUERIES_FILE}")
     else:
+        # Empty raw_queries triggers generate_queries to call the LLM
         run_log.append("No job_queries.md found — LLM will generate queries from CVs")
 
-    # Load companies
+    # ── Companies ───────────────────────────────────────────────────────────
     if COMPANIES_FILE.exists():
-        lines = COMPANIES_FILE.read_text(encoding="utf-8").splitlines()
-        companies = [
-            line.strip() for line in lines
-            if line.strip() and not line.strip().startswith("#")
-        ]
+        companies = _read_md_list(COMPANIES_FILE)
         run_log.append(f"Loaded {len(companies)} companies from {COMPANIES_FILE}")
 
-    # Load hints cache
+    # ── Hints cache ─────────────────────────────────────────────────────────
     company_hints = _load_hints_cache()
     hint_count = sum(1 for c in companies if c in company_hints)
     run_log.append(f"Hints cache: {hint_count}/{len(companies)} companies have hints")
-    logger.info("Context loaded: %d CVs, %d PDFs, %d queries, %d companies (%d hinted)",
-                len(cvs), len(pdf_paths), len(raw_queries), len(companies), hint_count)
+    logger.info(
+        "Context loaded: %d CVs, %d PDFs, %d queries, %d companies (%d hinted)",
+        len(cvs), len(pdf_paths), len(raw_queries), len(companies), hint_count,
+    )
 
     return {
         **state,

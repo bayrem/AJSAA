@@ -1,4 +1,13 @@
-"""OneDrive storage — placeholder."""
+"""OneDrive storage — placeholder.
+
+Falls back to local-only storage until implemented. To complete the
+integration:
+
+  1. Add ``msal`` to requirements.txt for Azure AD device-code auth.
+  2. Set the three OneDrive env vars in ``.env`` (see ``.env.template``).
+  3. Implement an ``_upload`` method that pushes ``self.path`` via
+     Microsoft Graph's ``driveItem.put-content`` endpoint.
+"""
 import logging
 
 from providers.storage.local import LocalJSONProvider
@@ -7,14 +16,10 @@ logger = logging.getLogger(__name__)
 
 
 class OneDriveProvider(LocalJSONProvider):
-    """
-    Placeholder. Implement using Microsoft Graph API:
-    https://learn.microsoft.com/en-us/graph/api/driveitem-put-content
+    """Stub — writes to local storage and logs a placeholder warning."""
 
-    Required env vars: ONEDRIVE_CLIENT_ID, ONEDRIVE_CLIENT_SECRET, ONEDRIVE_TENANT_ID
-    Add `msal` to requirements.txt for auth.
-    """
-
-    def __init__(self, cfg: dict):
+    def __init__(self, cfg: dict) -> None:
         super().__init__(cfg.get("local_path", ".data/jobs.json"))
+        # Warning at construction time so misconfiguration surfaces before
+        # the first run-end attempt to sync.
         logger.warning("OneDriveProvider is a placeholder — using local storage only")
