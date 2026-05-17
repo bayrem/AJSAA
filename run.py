@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Callable
 
 from dotenv import load_dotenv
+from rich.console import Group, RenderableType
 from rich.live import Live
 from rich.table import Table
 from rich.text import Text
@@ -123,6 +124,54 @@ def _make_dashboard(
     return table
 
 
+def _fmt_compact_tokens(n: int) -> str:
+    """Compact integer formatter for the live footer (``14237`` -> ``14.2k``)."""
+    if n < 1000:
+        return str(n)
+    if n < 10_000:
+        return f"{n / 1000:.1f}k"
+    return f"{n / 1000:.0f}k"
+
+
+def _format_footer_tokens(snapshot: dict) -> str:
+    """One-line compact token footer rendered live below the dashboard table.
+
+    The footer reads from a live ``usage_tracker.snapshot()`` (NOT the final
+    state — that doesn't exist until the run ends). It must be safe to call
+    when nothing has happened yet, so an empty snapshot renders zeros rather
+    than blowing up.
+    """
+    grand = (snapshot or {}).get("grand_total") or {}
+    in_tok = int(grand.get("input_tokens", 0) or 0)
+    out_tok = int(grand.get("output_tokens", 0) or 0)
+    calls = int(grand.get("calls", 0) or 0)
+    cost = float(grand.get("cost_usd", 0.0) or 0.0)
+    return (
+        f"Tokens: {_fmt_compact_tokens(in_tok)} in / "
+        f"{_fmt_compact_tokens(out_tok)} out · "
+        f"${cost:.2f} · {calls} calls"
+    )
+
+
+def _make_live_view(
+    statuses: dict,
+    kpis: dict,
+    timings: dict,
+    run_id: str,
+    ts: str,
+    token_snapshot: dict,
+) -> RenderableType:
+    """Stack the dashboard table over a compact token-usage footer line.
+
+    Kept as a thin wrapper around :func:`_make_dashboard` so existing callers
+    (and tests) that only want the table can keep using it. The footer is
+    rendered as dim text so it doesn't compete visually with the table.
+    """
+    table = _make_dashboard(statuses, kpis, timings, run_id, ts)
+    footer = Text(_format_footer_tokens(token_snapshot), style="dim")
+    return Group(table, footer)
+
+
 # ── Logging setup ────────────────────────────────────────────────────────────
 
 def _setup_logging(cfg: dict, run_id: str) -> None:
@@ -198,6 +247,7 @@ def _build_initial_state(cfg: dict, run_id: str, ts: str) -> dict:
         "notification_sent": False,
         "errors": [],
         "run_log": [],
+        "token_usage": {},
     }
 
 
@@ -216,8 +266,14 @@ def _run_pipeline(graph, initial_state: dict, run_id: str, ts: str) -> tuple[dic
     node_start = time.time()
     final_state: dict = dict(initial_state)
 
+    # Lazy import so test paths that never run the pipeline don't pay for the
+    # callback handler import chain. Inside the loop we re-snapshot each
+    # update so the footer reflects current spend without waiting for the run
+    # to finish.
+    from providers.llm import usage_tracker
+
     with Live(
-        _make_dashboard(statuses, kpis_display, node_timings, run_id, ts),
+        _make_live_view(statuses, kpis_display, node_timings, run_id, ts, usage_tracker.snapshot()),
         refresh_per_second=4,
         transient=True,
     ) as live:
@@ -246,9 +302,65 @@ def _run_pipeline(graph, initial_state: dict, run_id: str, ts: str) -> tuple[dic
                         statuses[NODE_ORDER[next_idx]] = "running"
 
                 final_state.update(updates)
-                live.update(_make_dashboard(statuses, kpis_display, node_timings, run_id, ts))
+                live.update(
+                    _make_live_view(
+                        statuses, kpis_display, node_timings, run_id, ts,
+                        usage_tracker.snapshot(),
+                    )
+                )
 
     return final_state, node_timings, time.time() - run_start
+
+
+def _format_token_summary(snapshot: dict) -> str:
+    """Build the one-line run-end summary string from a tracker snapshot.
+
+    Shape: ``Tokens: $X.XX total · NNNN in / MMMM out · N calls (m1 $A.AA, m2 $B.BB)``.
+
+    The per-model parenthetical lists models sorted by descending cost so the
+    biggest contributor reads first. A short alias is used for the verbose
+    Claude/GPT model names to keep the line readable.
+    """
+    grand = snapshot.get("grand_total") or {}
+    by_model = snapshot.get("by_model") or {}
+
+    total_cost = float(grand.get("cost_usd", 0.0) or 0.0)
+    in_tok = int(grand.get("input_tokens", 0) or 0)
+    out_tok = int(grand.get("output_tokens", 0) or 0)
+    calls = int(grand.get("calls", 0) or 0)
+
+    # Sort models by cost desc so the priciest read first.
+    parts: list[str] = []
+    for model, entry in sorted(
+        by_model.items(),
+        key=lambda kv: float(kv[1].get("cost_usd", 0.0) or 0.0),
+        reverse=True,
+    ):
+        alias = _model_alias(model)
+        cost = float(entry.get("cost_usd", 0.0) or 0.0)
+        parts.append(f"{alias} ${cost:.2f}")
+
+    suffix = f" ({', '.join(parts)})" if parts else ""
+    return (
+        f"Tokens: ${total_cost:.2f} total · "
+        f"{in_tok} in / {out_tok} out · "
+        f"{calls} calls{suffix}"
+    )
+
+
+# Compact display names for the per-model parenthetical in the summary line.
+# Anything not in the map falls back to the raw model identifier.
+_MODEL_ALIASES: dict[str, str] = {
+    "claude-sonnet-4-6": "sonnet",
+    "claude-haiku-4-5-20251001": "haiku",
+    "gpt-4o": "gpt-4o",
+    "gpt-4o-mini": "gpt-4o-mini",
+}
+
+
+def _model_alias(model: str) -> str:
+    """Return the short label used in the run-end summary line."""
+    return _MODEL_ALIASES.get(model, model)
 
 
 def _write_reports(
@@ -266,12 +378,15 @@ def _write_reports(
     """
     try:
         from scripts.report import append_runs_json, generate_run_report, update_index
+        token_usage = final_state.get("token_usage") or {}
+        grand_total = token_usage.get("grand_total") or {}
         stats = {
             "queries": len(final_state.get("queries", [])),
             "found": len(final_state.get("raw_jobs", [])),
             "passed": len(final_state.get("scored_jobs", [])),
             "new_saved": final_state.get("stored_count", 0),
             "errors": len(final_state.get("errors", [])),
+            "cost_usd": float(grand_total.get("cost_usd", 0.0) or 0.0),
         }
         report_path = generate_run_report(final_state, run_duration, node_timings)
         update_index(run_id, ts, run_duration, stats)
@@ -283,10 +398,38 @@ def _write_reports(
 
 # ── Main entrypoint ──────────────────────────────────────────────────────────
 
+def _valid_port(raw: str) -> int:
+    """Argparse type: only allow unprivileged ports.
+
+    Ports < 1024 require root on Linux; > 65535 is invalid. We refuse both so
+    the user gets a clean argparse error instead of an OSError mid-boot.
+    """
+    try:
+        n = int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"port must be an integer: {raw!r}") from exc
+    if not (1024 <= n <= 65535):
+        raise argparse.ArgumentTypeError(
+            f"port must be in 1024-65535, got {n}"
+        )
+    return n
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="AJSAA — Autonomous Job Search AI Agent")
     parser.add_argument("--config", default="config.yaml", help="Path to config file")
     parser.add_argument("--dry-run", action="store_true", help="Score jobs without writing to storage")
+    parser.add_argument(
+        "--port",
+        type=_valid_port,
+        default=8765,
+        help="Live monitor port (1024-65535). Default 8765.",
+    )
+    parser.add_argument(
+        "--no-monitor",
+        action="store_true",
+        help="Disable the live HTTP monitor (TUI + post-run report still work).",
+    )
     args = parser.parse_args()
 
     cfg = _load_config(args.config)
@@ -304,14 +447,57 @@ def main() -> None:
     logger.info("=" * 60)
     logger.info("AJSAA run starting  [run_id=%s]", run_id)
 
+    # ── Live monitor boot ──────────────────────────────────────────────────
+    # Brought up BEFORE the graph runs so the page is reachable the instant
+    # the user clicks the printed URL. If --no-monitor is set we still build
+    # the graph and run the pipeline; only the HTTP server is skipped.
+    monitor = None
+    if not args.no_monitor:
+        try:
+            from scripts.live_server import LiveMonitor
+            monitor = LiveMonitor(port=args.port)
+            url = monitor.start()
+            logger.info("Live monitor: %s  (run_id=%s)", url, run_id)
+            print(f"🌐 Live monitor: {url}  (run_id={run_id})", flush=True)
+
+            # Register the writer with the graph so _safe pushes per-node
+            # snapshots. Keeps graph.py independent of http.server imports.
+            from agent.graph import set_live_state_writer
+            set_live_state_writer(monitor.update_state)
+        except RuntimeError as exc:
+            # Port-in-use is the common case here. Log and continue without
+            # the monitor — the post-run report is still useful.
+            logger.warning("Live monitor disabled: %s", exc)
+            monitor = None
+
     # Lazy import — the graph builds the full node import chain
-    from agent.graph import build_graph
+    from agent.graph import build_graph, set_live_state_writer
     graph = build_graph()
     initial_state = _build_initial_state(cfg, run_id, ts)
 
-    final_state, node_timings, run_duration = _run_pipeline(graph, initial_state, run_id, ts)
+    try:
+        final_state, node_timings, run_duration = _run_pipeline(graph, initial_state, run_id, ts)
 
-    _write_reports(final_state, node_timings, run_duration, run_id, ts, logger)
+        # Capture token usage AFTER the pipeline finishes so #61 / #62 can render
+        # the per-model and per-node breakdown straight from final_state.
+        # Lazy import keeps the graph-free codepaths (e.g. `python -m pytest`)
+        # off the usage_tracker import unless they actually run a pipeline.
+        from providers.llm import usage_tracker
+        final_state["token_usage"] = usage_tracker.snapshot()
+        logger.info(_format_token_summary(final_state["token_usage"]))
+
+        _write_reports(final_state, node_timings, run_duration, run_id, ts, logger)
+
+        # Push the final snapshot so anyone still watching the live page sees
+        # the completed state. Status reflects whether any node errored.
+        if monitor is not None:
+            _push_final_state(monitor, final_state, node_timings)
+    finally:
+        # Detach the writer regardless of how we exit so a follow-up test or
+        # interactive re-run doesn't accidentally call a torn-down monitor.
+        set_live_state_writer(None)
+        if monitor is not None:
+            monitor.stop()
 
     logger.info("Run complete — %d new jobs stored", final_state.get("stored_count", 0))
     if final_state.get("errors"):
@@ -321,6 +507,31 @@ def main() -> None:
 
     if final_state.get("errors"):
         sys.exit(1)
+
+
+def _push_final_state(monitor, final_state: dict, node_timings: dict) -> None:
+    """Push the run-end snapshot to the monitor with terminal status.
+
+    Status is ``"failed"`` if any errors accumulated, else ``"complete"``.
+    The live page's JS poll will see this and stop polling.
+    """
+    status = "failed" if final_state.get("errors") else "complete"
+    monitor.update_state({
+        "run_id": final_state.get("run_id", "unknown"),
+        "timestamp": final_state.get("timestamp", ""),
+        "status": status,
+        "current_node": None,
+        "node_status": {n: "complete" for n in NODE_ORDER if n in node_timings},
+        "node_timings": dict(node_timings),
+        "kpis": {
+            "raw_jobs": len(final_state.get("raw_jobs", [])),
+            "scored_jobs": len(final_state.get("scored_jobs", [])),
+            "stored_count": final_state.get("stored_count", 0),
+        },
+        "token_usage": final_state.get("token_usage", {}),
+        "errors": list(final_state.get("errors", [])),
+        "scored_jobs": list(final_state.get("scored_jobs", [])),
+    })
 
 
 if __name__ == "__main__":

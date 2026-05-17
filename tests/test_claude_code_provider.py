@@ -14,9 +14,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from providers.llm import usage_tracker
 from providers.llm.claude_code_provider import (
     _BACKOFF_SECONDS,
     _backoff_seconds,
+    _extract_usage_from_cli_json,
     _invoke_claude_cli,
     _parse_cli_response,
 )
@@ -209,3 +211,109 @@ class TestInvokeClaudeCli:
              patch("providers.llm.claude_code_provider.subprocess.run") as mock_run:
             mock_run.return_value = _mock_run(0, "plain text response")
             assert _invoke_claude_cli("test") == "plain text response"
+
+
+# ── Usage capture (issue #60) ───────────────────────────────────────────────
+
+
+def _json_success_with_usage(text: str, model: str = "claude-sonnet-4-6") -> str:
+    """JSON success blob with the ``usage`` + ``total_cost_usd`` fields the CLI emits."""
+    return json.dumps({
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "result": text,
+        "model": model,
+        "usage": {
+            "input_tokens": 123,
+            "output_tokens": 45,
+            "cache_read_input_tokens": 1000,
+            "cache_creation_input_tokens": 200,
+        },
+        "total_cost_usd": 0.0042,
+    })
+
+
+class TestExtractUsageFromCliJson:
+    def test_returns_none_for_empty_stdout(self):
+        assert _extract_usage_from_cli_json("") is None
+
+    def test_returns_none_for_non_json(self):
+        assert _extract_usage_from_cli_json("plain text not json") is None
+
+    def test_returns_none_when_usage_missing(self):
+        stdout = json.dumps({"is_error": False, "result": "hi"})
+        assert _extract_usage_from_cli_json(stdout) is None
+
+    def test_returns_canonical_shape(self):
+        stdout = _json_success_with_usage("hello")
+        extracted = _extract_usage_from_cli_json(stdout)
+        assert extracted is not None
+        model, usage, cost = extracted
+        assert model == "claude-sonnet-4-6"
+        assert usage == {
+            "input_tokens": 123,
+            "output_tokens": 45,
+            "cache_read_input_tokens": 1000,
+            "cache_creation_input_tokens": 200,
+        }
+        assert cost == pytest.approx(0.0042)
+
+    def test_missing_cost_defaults_to_zero(self):
+        # Older CLI builds may not include total_cost_usd.
+        stdout = json.dumps({
+            "is_error": False,
+            "result": "hi",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        })
+        extracted = _extract_usage_from_cli_json(stdout)
+        assert extracted is not None
+        _, _, cost = extracted
+        assert cost == 0.0
+
+
+class TestInvokeClaudeCliRecordsUsage:
+    """Verify the CLI invocation records token usage into the singleton tracker."""
+
+    def test_successful_call_records_usage(self):
+        usage_tracker.reset()
+        with patch("shutil.which", return_value="/usr/bin/claude"), \
+             patch("providers.llm.claude_code_provider.subprocess.run") as mock_run:
+            mock_run.return_value = _mock_run(0, _json_success_with_usage("hello"))
+            _invoke_claude_cli("test")
+
+        snap = usage_tracker.snapshot()
+        assert snap["grand_total"]["calls"] == 1
+        assert snap["grand_total"]["input_tokens"] == 123
+        assert snap["grand_total"]["output_tokens"] == 45
+        # Cost comes straight from the CLI's total_cost_usd, not the price table.
+        assert snap["grand_total"]["cost_usd"] == pytest.approx(0.0042)
+        assert "claude-sonnet-4-6" in snap["by_model"]
+        usage_tracker.reset()
+
+    def test_failed_call_does_not_record(self):
+        usage_tracker.reset()
+        with patch("shutil.which", return_value="/usr/bin/claude"), \
+             patch("providers.llm.claude_code_provider.subprocess.run") as mock_run, \
+             patch("providers.llm.claude_code_provider.time.sleep"):
+            mock_run.return_value = _mock_run(1, _json_error("rate_limit_exceeded"))
+            with pytest.raises(RuntimeError):
+                _invoke_claude_cli("test", retries=1)
+
+        snap = usage_tracker.snapshot()
+        # No records — recording is only on successful return.
+        assert snap["grand_total"]["calls"] == 0
+        usage_tracker.reset()
+
+    def test_legacy_text_response_does_not_record(self):
+        """Non-JSON success path is backwards-compatible but skips usage recording."""
+        usage_tracker.reset()
+        with patch("shutil.which", return_value="/usr/bin/claude"), \
+             patch("providers.llm.claude_code_provider.subprocess.run") as mock_run:
+            mock_run.return_value = _mock_run(0, "plain text response")
+            assert _invoke_claude_cli("test") == "plain text response"
+
+        snap = usage_tracker.snapshot()
+        # The call succeeded but had no JSON usage block — record was skipped.
+        assert snap["grand_total"]["calls"] == 0
+        usage_tracker.reset()

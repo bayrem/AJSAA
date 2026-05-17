@@ -32,6 +32,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
+from providers.llm import usage_tracker
 from providers.llm.base import BaseLLMProvider
 
 logger = logging.getLogger(__name__)
@@ -188,6 +189,56 @@ def _parse_cli_response(
     return (None, f"CLI exited with code {returncode}: {err_text}", False)
 
 
+def _extract_usage_from_cli_json(stdout: str) -> tuple[str, dict, float] | None:
+    """Return ``(model, canonical_usage, total_cost_usd)`` from a CLI JSON blob.
+
+    The CLI emits a top-level ``usage`` dict plus a top-level ``total_cost_usd``
+    field, and (on recent versions) a ``model`` field. We translate the
+    SDK-specific usage keys to the canonical shape used by
+    ``usage_tracker.record``. Returns ``None`` if the stdout isn't valid JSON
+    or the ``usage`` block is missing — callers should skip recording.
+
+    The Claude Code CLI's ``usage`` block uses the same key names as the
+    Anthropic Messages API: ``input_tokens``, ``output_tokens``,
+    ``cache_read_input_tokens``, ``cache_creation_input_tokens``.
+    """
+    if not stdout:
+        return None
+    try:
+        data = json.loads(stdout)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    usage = data.get("usage")
+    if not isinstance(usage, dict):
+        return None
+
+    # Cost may be missing on older CLI versions — default to 0.0 so the
+    # call still records (tokens are still useful even if cost is unknown).
+    cost = data.get("total_cost_usd", 0.0)
+    try:
+        cost_f = float(cost)
+    except (TypeError, ValueError):
+        cost_f = 0.0
+
+    # Prefer the model name reported by the CLI itself. If the CLI didn't echo
+    # a model field, the caller will pass through the configured model string.
+    model = str(data.get("model") or "")
+
+    return (
+        model,
+        {
+            "input_tokens": int(usage.get("input_tokens", 0) or 0),
+            "output_tokens": int(usage.get("output_tokens", 0) or 0),
+            "cache_read_input_tokens": int(usage.get("cache_read_input_tokens", 0) or 0),
+            "cache_creation_input_tokens": int(usage.get("cache_creation_input_tokens", 0) or 0),
+        },
+        cost_f,
+    )
+
+
 def _invoke_claude_cli(
     prompt: str,
     timeout: int = 120,
@@ -262,6 +313,20 @@ def _invoke_claude_cli(
         )
 
         if content is not None:
+            # Capture token usage and dollar cost from the CLI's JSON payload.
+            # The CLI bills us directly (via the user's Pro/Max subscription),
+            # so we use its ``total_cost_usd`` rather than the price table.
+            # Failures here are swallowed — observability must never break
+            # the actual LLM call path.
+            try:
+                extracted = _extract_usage_from_cli_json(result.stdout)
+                if extracted is not None:
+                    cli_model, usage_dict, cost = extracted
+                    # Fall back to the configured model name if the CLI
+                    # didn't echo one (older CLI versions).
+                    usage_tracker.record(cli_model or model or "claude_code_agent", usage_dict, cost)
+            except Exception as exc:  # pragma: no cover — defensive only
+                logger.debug("usage capture failed: %s", exc)
             return content
 
         last_error = RuntimeError(err_msg or "claude CLI failed with unknown error")

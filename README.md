@@ -69,10 +69,10 @@ python3 -m venv .venv
 # Drop a PDF or .md file into query/resume/
 
 # 4. Run
-infisical run --env=development -- python run.py
+infisical run --env=dev -- python run.py
 
 # Dry-run (scores jobs without writing to storage)
-infisical run --env=development -- python run.py --dry-run
+infisical run --env=dev -- python run.py --dry-run
 ```
 
 ## Configuration
@@ -123,8 +123,36 @@ AJSAA calls the ATS API directly (no LLM tokens) and falls back to web search fo
 Each run produces:
 
 - **Live TUI** — Rich terminal dashboard updates in-place as the pipeline runs, showing node status, KPIs, and elapsed time per step
+- **Live web monitor** — an in-process HTTP server serves a browser-based dashboard at `http://127.0.0.1:8765/` for the duration of the run (see below)
 - **HTML report** — after every run, `logs/index.html` (run list) and `logs/runs/run_*.html` (per-run detail with job cards) are written automatically
 - **Log rotation** — configurable via `logging.rotation` (`none` / `daily` / `per_run`) with a `retention` count
+
+### Live monitor
+
+When the pipeline is launched via Claude Code in VS Code (which blocks the TUI) the live web monitor is the way to watch progress. `run.py` spawns a small `http.server.ThreadingHTTPServer` on `127.0.0.1:8765` and prints the URL on boot:
+
+```
+🌐 Live monitor: http://127.0.0.1:8765/  (run_id=abc12345)
+```
+
+The page polls `/state.json` every second, refreshes the pipeline table, token-spend block, and job cards in place, and stops polling automatically when the run finishes. The same HTML template is reused for the static post-run report at `logs/runs/run_*.html` (just without the JS poll block).
+
+CLI flags (issue #62):
+
+- `--port N` — override the default 8765 (must be 1024–65535).
+- `--no-monitor` — skip the HTTP server entirely; the TUI and post-run report still work.
+
+The server binds to `127.0.0.1` only by design — no authentication, no network exposure. It dies with `run.py` (daemon thread). If the port is busy the run continues without the monitor and logs a clear warning.
+
+### Token usage tracking
+
+Every LLM call is recorded with its token counts and dollar cost (issue #60). The data is surfaced in three places (issue #61):
+
+- **Live TUI footer** — a compact line below the dashboard table refreshes at 4 Hz: `Tokens: 14.2k in / 1.9k out · $0.42 · 8 calls`
+- **Pipeline-end log line** — one-line summary printed to stdout/log: `Tokens: $0.42 total · 12345 in / 1876 out · 8 calls (sonnet $0.31, haiku $0.11)`
+- **HTML report** — `logs/runs/run_*.html` includes a Token spend block with grand total, per-model table, and a collapsed per-node breakdown; `logs/index.html` adds a Cost column to the run list
+
+Per-model and per-node totals are stored on the final state as `token_usage` (shape: `{"by_model": {...}, "by_node": {...}, "grand_total": {...}}`). Prices live in `providers/llm/pricing.py` and need a manual refresh when a vendor changes its rate card — the `# Prices verified YYYY-MM-DD` comment is the canary. Unknown models log a single warning and report `$0.00` rather than crashing.
 
 ## Tech stack
 
