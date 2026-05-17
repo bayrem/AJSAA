@@ -4,6 +4,7 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 _LOGS_DIR = Path("logs")
 _RUNS_DIR = _LOGS_DIR / "runs"
@@ -19,6 +20,117 @@ def _fmt_duration(seconds: float) -> str:
         return f"{seconds:.0f}s"
     m, s = divmod(int(seconds), 60)
     return f"{m}m{s:02d}s"
+
+
+def _fmt_tokens(n: int) -> str:
+    """Render an integer token count compactly (e.g. 14200 -> '14.2k')."""
+    if n < 1000:
+        return str(n)
+    if n < 10_000:
+        return f"{n / 1000:.1f}k"
+    return f"{n / 1000:.0f}k"
+
+
+def _fmt_cost(cost: float) -> str:
+    """Render a USD cost. Uses 4 decimals under $0.01 so tiny costs aren't '$0.00'."""
+    if cost == 0:
+        return "$0.00"
+    if cost < 0.01:
+        return f"${cost:.4f}"
+    return f"${cost:.2f}"
+
+
+def _safe_int(value: Any) -> int:
+    """Coerce ``value`` to ``int`` with a 0 default — providers may emit None."""
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _safe_float(value: Any) -> float:
+    """Coerce ``value`` to ``float`` with a 0.0 default."""
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _token_block_html(token_usage: dict) -> str:
+    """Render the post-pipeline 'Token spend' block.
+
+    Graceful when ``token_usage`` is empty (no LLM calls in the run): we show a
+    short '—' placeholder instead of an empty card, so the report layout stays
+    consistent regardless of what the pipeline actually did.
+
+    All model and node names are passed through :func:`html.escape` so an
+    attacker-controlled model string (e.g. provider returns a weird name) can't
+    inject HTML.
+    """
+    if not token_usage:
+        return (
+            "<h2>Token spend</h2>"
+            '<p style="color:#6c757d">— no LLM calls recorded this run.</p>'
+        )
+
+    grand = token_usage.get("grand_total") or {}
+    by_model = token_usage.get("by_model") or {}
+    by_node = token_usage.get("by_node") or {}
+
+    g_in = _safe_int(grand.get("input_tokens"))
+    g_out = _safe_int(grand.get("output_tokens"))
+    g_calls = _safe_int(grand.get("calls"))
+    g_cost = _safe_float(grand.get("cost_usd"))
+
+    grand_line = (
+        f'<p style="font-size:14px;margin:8px 0 16px;">'
+        f"<strong>Grand total:</strong> {_fmt_cost(g_cost)} · "
+        f"{g_in:,} in / {g_out:,} out · {g_calls} calls"
+        "</p>"
+    )
+
+    model_rows = "\n".join(_usage_row_html(name, entry) for name, entry in _sorted_by_cost(by_model))
+    model_table = (
+        "<h3 style='font-size:14px;margin:16px 0 8px;'>By model</h3>"
+        "<table>"
+        "<thead><tr><th>Model</th><th>Calls</th><th>Tokens</th><th>Cost</th></tr></thead>"
+        f"<tbody>{model_rows}</tbody>"
+        "</table>"
+    ) if by_model else ""
+
+    node_rows = "\n".join(_usage_row_html(name, entry) for name, entry in _sorted_by_cost(by_node))
+    node_block = (
+        "<details style='margin-top:8px;'>"
+        "<summary style='cursor:pointer;font-weight:bold;font-size:13px;'>By node (click to expand)</summary>"
+        "<table style='margin-top:8px;'>"
+        "<thead><tr><th>Node</th><th>Calls</th><th>Tokens</th><th>Cost</th></tr></thead>"
+        f"<tbody>{node_rows}</tbody>"
+        "</table>"
+        "</details>"
+    ) if by_node else ""
+
+    return f"<h2>Token spend</h2>{grand_line}{model_table}{node_block}"
+
+
+def _sorted_by_cost(store: dict) -> list[tuple[str, dict]]:
+    """Return ``store`` items sorted by ``cost_usd`` descending (biggest first)."""
+    return sorted(store.items(), key=lambda kv: _safe_float(kv[1].get("cost_usd")), reverse=True)
+
+
+def _usage_row_html(name: str, entry: dict) -> str:
+    """Render one ``<tr>`` for the per-model / per-node usage tables."""
+    calls = _safe_int(entry.get("calls"))
+    in_tok = _safe_int(entry.get("input_tokens"))
+    out_tok = _safe_int(entry.get("output_tokens"))
+    cost = _safe_float(entry.get("cost_usd"))
+    return (
+        "<tr>"
+        f"<td>{_html.escape(str(name))}</td>"
+        f"<td>{calls}</td>"
+        f"<td>{_fmt_tokens(in_tok + out_tok)} ({_fmt_tokens(in_tok)} in / {_fmt_tokens(out_tok)} out)</td>"
+        f"<td>{_fmt_cost(cost)}</td>"
+        "</tr>"
+    )
 
 
 def _score_color(score: int) -> str:
@@ -91,6 +203,9 @@ def generate_run_report(state: dict, duration_s: float, node_timings: dict) -> P
     errors_display = "none" if not errors else "block"
     errors_list = "\n".join(f"<li>{e}</li>" for e in errors)
     no_jobs_msg = "" if sorted_jobs else '<p style="color:#6c757d">No jobs stored this run.</p>'
+    # ``token_usage`` may be missing entirely (older states) or empty ({}) when
+    # the run made no LLM calls — both are handled by _token_block_html.
+    token_block = _token_block_html(state.get("token_usage") or {})
 
     html = "\n".join([
         "<!DOCTYPE html>",
@@ -119,6 +234,7 @@ def generate_run_report(state: dict, duration_s: float, node_timings: dict) -> P
         "<tbody>",
         node_rows,
         "</tbody></table>",
+        token_block,
         f'<div class="errors" style="display:{errors_display}">',
         f"<strong>Errors ({len(errors)})</strong><ul>{errors_list}</ul>",
         "</div>",
@@ -152,7 +268,7 @@ a{color:#0d6efd;text-decoration:none;}
 <body>
 <h1>AJSAA — All Runs</h1>
 <table>
-<thead><tr><th>Run ID</th><th>Date</th><th>Duration</th><th>Queries</th><th>Found</th><th>Passed</th><th>New saved</th><th>Errors</th><th></th></tr></thead>
+<thead><tr><th>Run ID</th><th>Date</th><th>Duration</th><th>Queries</th><th>Found</th><th>Passed</th><th>New saved</th><th>Errors</th><th>Cost</th><th></th></tr></thead>
 <tbody>
 <!-- ROWS -->
 </tbody>
@@ -161,13 +277,54 @@ a{color:#0d6efd;text-decoration:none;}
 </html>"""
 
 
+_INDEX_LEGACY_HEADER = (
+    "<thead><tr><th>Run ID</th><th>Date</th><th>Duration</th>"
+    "<th>Queries</th><th>Found</th><th>Passed</th>"
+    "<th>New saved</th><th>Errors</th><th></th></tr></thead>"
+)
+_INDEX_NEW_HEADER = (
+    "<thead><tr><th>Run ID</th><th>Date</th><th>Duration</th>"
+    "<th>Queries</th><th>Found</th><th>Passed</th>"
+    "<th>New saved</th><th>Errors</th><th>Cost</th><th></th></tr></thead>"
+)
+
+
+def _migrate_legacy_index(content: str) -> str:
+    """Upgrade an older index.html in place: add the Cost column.
+
+    Older runs (pre-#61) wrote rows with 9 ``<td>`` cells (last one is the
+    detail link). We splice a ``<td>—</td>`` placeholder in just before the
+    final link cell so the column count matches the new 10-column header.
+    Detection is cheap: if the header already declares Cost we do nothing.
+    """
+    if "<th>Cost</th>" in content:
+        return content
+    # Swap header in place.
+    content = content.replace(_INDEX_LEGACY_HEADER, _INDEX_NEW_HEADER)
+    # Patch every legacy row: insert an em-dash cell before the link cell.
+    # Pattern matches the trailing `<td><a href="...">→</a></td></tr>` shape
+    # the legacy template produced.
+    legacy_row_re = re.compile(
+        r'(<td><a href="[^"]*">→</a></td></tr>)'
+    )
+    return legacy_row_re.sub(r"<td>—</td>\1", content)
+
+
 def update_index(run_id: str, timestamp: str, duration_s: float, stats: dict) -> None:
-    """Prepend a new row to logs/index.html (newest first). Creates the file if missing."""
+    """Prepend a new row to logs/index.html (newest first). Creates the file if missing.
+
+    Legacy index files (pre-#61, no Cost column) are migrated on first write:
+    the header is swapped and existing rows get a ``—`` Cost cell so columns
+    line up. After migration, every subsequent write is a plain prepend.
+    """
     _LOGS_DIR.mkdir(parents=True, exist_ok=True)
     index_path = _LOGS_DIR / "index.html"
 
     matches = sorted(_RUNS_DIR.glob(f"run_*_{run_id}.html")) if _RUNS_DIR.exists() else []
     detail_href = f"runs/{matches[-1].name}" if matches else "#"
+
+    cost = stats.get("cost_usd")
+    cost_cell = _fmt_cost(_safe_float(cost)) if cost is not None else "—"
 
     new_row = (
         f"<tr>"
@@ -179,6 +336,7 @@ def update_index(run_id: str, timestamp: str, duration_s: float, stats: dict) ->
         f"<td>{stats.get('passed', 0)}</td>"
         f"<td>{stats.get('new_saved', 0)}</td>"
         f"<td>{stats.get('errors', 0)}</td>"
+        f"<td>{cost_cell}</td>"
         f'<td><a href="{detail_href}">→</a></td>'
         f"</tr>"
     )
@@ -187,6 +345,7 @@ def update_index(run_id: str, timestamp: str, duration_s: float, stats: dict) ->
         content = _INDEX_TEMPLATE.replace(_INDEX_ROW_MARKER, f"{new_row}\n{_INDEX_ROW_MARKER}")
     else:
         content = index_path.read_text(encoding="utf-8")
+        content = _migrate_legacy_index(content)
         content = content.replace(_INDEX_ROW_MARKER, f"{new_row}\n{_INDEX_ROW_MARKER}")
 
     index_path.write_text(content, encoding="utf-8")

@@ -128,13 +128,13 @@ Each run produces:
 
 ### Token usage tracking
 
-Every LLM call is recorded with its token counts and dollar cost. The pipeline-end log line summarises the run:
+Every LLM call is recorded with its token counts and dollar cost (issue #60). The data is surfaced in three places (issue #61):
 
-```
-Tokens: $0.42 total · 12345 in / 1876 out · 8 calls (sonnet $0.31, haiku $0.11)
-```
+- **Live TUI footer** — a compact line below the dashboard table refreshes at 4 Hz: `Tokens: 14.2k in / 1.9k out · $0.42 · 8 calls`
+- **Pipeline-end log line** — one-line summary printed to stdout/log: `Tokens: $0.42 total · 12345 in / 1876 out · 8 calls (sonnet $0.31, haiku $0.11)`
+- **HTML report** — `logs/runs/run_*.html` includes a Token spend block with grand total, per-model table, and a collapsed per-node breakdown; `logs/index.html` adds a Cost column to the run list
 
-Per-model and per-node breakdowns are stored on the final state as `token_usage` (shape: `{"by_model": {...}, "by_node": {...}, "grand_total": {...}}`). Prices live in `providers/llm/pricing.py` and need a manual refresh when a vendor changes its rate card — the `# Prices verified YYYY-MM-DD` comment is the canary. Unknown models log a single warning and are reported with `$0.00` cost rather than crashing.
+Per-model and per-node totals are stored on the final state as `token_usage` (shape: `{"by_model": {...}, "by_node": {...}, "grand_total": {...}}`). Prices live in `providers/llm/pricing.py` and need a manual refresh when a vendor changes its rate card — the `# Prices verified YYYY-MM-DD` comment is the canary. Unknown models log a single warning and report `$0.00` rather than crashing.
 
 ## Tech stack
 

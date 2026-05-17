@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Callable
 
 from dotenv import load_dotenv
+from rich.console import Group, RenderableType
 from rich.live import Live
 from rich.table import Table
 from rich.text import Text
@@ -123,6 +124,54 @@ def _make_dashboard(
     return table
 
 
+def _fmt_compact_tokens(n: int) -> str:
+    """Compact integer formatter for the live footer (``14237`` -> ``14.2k``)."""
+    if n < 1000:
+        return str(n)
+    if n < 10_000:
+        return f"{n / 1000:.1f}k"
+    return f"{n / 1000:.0f}k"
+
+
+def _format_footer_tokens(snapshot: dict) -> str:
+    """One-line compact token footer rendered live below the dashboard table.
+
+    The footer reads from a live ``usage_tracker.snapshot()`` (NOT the final
+    state — that doesn't exist until the run ends). It must be safe to call
+    when nothing has happened yet, so an empty snapshot renders zeros rather
+    than blowing up.
+    """
+    grand = (snapshot or {}).get("grand_total") or {}
+    in_tok = int(grand.get("input_tokens", 0) or 0)
+    out_tok = int(grand.get("output_tokens", 0) or 0)
+    calls = int(grand.get("calls", 0) or 0)
+    cost = float(grand.get("cost_usd", 0.0) or 0.0)
+    return (
+        f"Tokens: {_fmt_compact_tokens(in_tok)} in / "
+        f"{_fmt_compact_tokens(out_tok)} out · "
+        f"${cost:.2f} · {calls} calls"
+    )
+
+
+def _make_live_view(
+    statuses: dict,
+    kpis: dict,
+    timings: dict,
+    run_id: str,
+    ts: str,
+    token_snapshot: dict,
+) -> RenderableType:
+    """Stack the dashboard table over a compact token-usage footer line.
+
+    Kept as a thin wrapper around :func:`_make_dashboard` so existing callers
+    (and tests) that only want the table can keep using it. The footer is
+    rendered as dim text so it doesn't compete visually with the table.
+    """
+    table = _make_dashboard(statuses, kpis, timings, run_id, ts)
+    footer = Text(_format_footer_tokens(token_snapshot), style="dim")
+    return Group(table, footer)
+
+
 # ── Logging setup ────────────────────────────────────────────────────────────
 
 def _setup_logging(cfg: dict, run_id: str) -> None:
@@ -217,8 +266,14 @@ def _run_pipeline(graph, initial_state: dict, run_id: str, ts: str) -> tuple[dic
     node_start = time.time()
     final_state: dict = dict(initial_state)
 
+    # Lazy import so test paths that never run the pipeline don't pay for the
+    # callback handler import chain. Inside the loop we re-snapshot each
+    # update so the footer reflects current spend without waiting for the run
+    # to finish.
+    from providers.llm import usage_tracker
+
     with Live(
-        _make_dashboard(statuses, kpis_display, node_timings, run_id, ts),
+        _make_live_view(statuses, kpis_display, node_timings, run_id, ts, usage_tracker.snapshot()),
         refresh_per_second=4,
         transient=True,
     ) as live:
@@ -247,7 +302,12 @@ def _run_pipeline(graph, initial_state: dict, run_id: str, ts: str) -> tuple[dic
                         statuses[NODE_ORDER[next_idx]] = "running"
 
                 final_state.update(updates)
-                live.update(_make_dashboard(statuses, kpis_display, node_timings, run_id, ts))
+                live.update(
+                    _make_live_view(
+                        statuses, kpis_display, node_timings, run_id, ts,
+                        usage_tracker.snapshot(),
+                    )
+                )
 
     return final_state, node_timings, time.time() - run_start
 
@@ -318,12 +378,15 @@ def _write_reports(
     """
     try:
         from scripts.report import append_runs_json, generate_run_report, update_index
+        token_usage = final_state.get("token_usage") or {}
+        grand_total = token_usage.get("grand_total") or {}
         stats = {
             "queries": len(final_state.get("queries", [])),
             "found": len(final_state.get("raw_jobs", [])),
             "passed": len(final_state.get("scored_jobs", [])),
             "new_saved": final_state.get("stored_count", 0),
             "errors": len(final_state.get("errors", [])),
+            "cost_usd": float(grand_total.get("cost_usd", 0.0) or 0.0),
         }
         report_path = generate_run_report(final_state, run_duration, node_timings)
         update_index(run_id, ts, run_duration, stats)
