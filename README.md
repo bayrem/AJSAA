@@ -126,6 +126,16 @@ Each run produces:
 - **HTML report** — after every run, `logs/index.html` (run list) and `logs/runs/run_*.html` (per-run detail with job cards) are written automatically
 - **Log rotation** — configurable via `logging.rotation` (`none` / `daily` / `per_run`) with a `retention` count
 
+### Token usage tracking
+
+Every LLM call is recorded with its token counts and dollar cost. The pipeline-end log line summarises the run:
+
+```
+Tokens: $0.42 total · 12345 in / 1876 out · 8 calls (sonnet $0.31, haiku $0.11)
+```
+
+Per-model and per-node breakdowns are stored on the final state as `token_usage` (shape: `{"by_model": {...}, "by_node": {...}, "grand_total": {...}}`). Prices live in `providers/llm/pricing.py` and need a manual refresh when a vendor changes its rate card — the `# Prices verified YYYY-MM-DD` comment is the canary. Unknown models log a single warning and are reported with `$0.00` cost rather than crashing.
+
 ## Tech stack
 
 | Concern | Default |

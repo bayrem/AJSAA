@@ -6,6 +6,7 @@ by setting ``provider: openai`` in config.yaml.
 import os
 
 from providers.llm.base import BaseLLMProvider
+from providers.llm.usage_tracker import UsageCaptureHandler
 
 
 class OpenAIProvider(BaseLLMProvider):
@@ -23,9 +24,13 @@ class OpenAIProvider(BaseLLMProvider):
         # another provider is selected.
         from langchain_openai import ChatOpenAI
 
+        # Attach the usage-capture callback at construction so every LLM call
+        # routed through this model records its token counts and cost into
+        # the module-level UsageTracker singleton.
         return ChatOpenAI(
             model=self.model,
             max_tokens=self.max_tokens,
             temperature=self.temperature,
             openai_api_key=self.api_key,
+            callbacks=[UsageCaptureHandler(default_model=self.model)],
         )

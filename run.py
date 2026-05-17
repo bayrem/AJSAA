@@ -198,6 +198,7 @@ def _build_initial_state(cfg: dict, run_id: str, ts: str) -> dict:
         "notification_sent": False,
         "errors": [],
         "run_log": [],
+        "token_usage": {},
     }
 
 
@@ -249,6 +250,57 @@ def _run_pipeline(graph, initial_state: dict, run_id: str, ts: str) -> tuple[dic
                 live.update(_make_dashboard(statuses, kpis_display, node_timings, run_id, ts))
 
     return final_state, node_timings, time.time() - run_start
+
+
+def _format_token_summary(snapshot: dict) -> str:
+    """Build the one-line run-end summary string from a tracker snapshot.
+
+    Shape: ``Tokens: $X.XX total · NNNN in / MMMM out · N calls (m1 $A.AA, m2 $B.BB)``.
+
+    The per-model parenthetical lists models sorted by descending cost so the
+    biggest contributor reads first. A short alias is used for the verbose
+    Claude/GPT model names to keep the line readable.
+    """
+    grand = snapshot.get("grand_total") or {}
+    by_model = snapshot.get("by_model") or {}
+
+    total_cost = float(grand.get("cost_usd", 0.0) or 0.0)
+    in_tok = int(grand.get("input_tokens", 0) or 0)
+    out_tok = int(grand.get("output_tokens", 0) or 0)
+    calls = int(grand.get("calls", 0) or 0)
+
+    # Sort models by cost desc so the priciest read first.
+    parts: list[str] = []
+    for model, entry in sorted(
+        by_model.items(),
+        key=lambda kv: float(kv[1].get("cost_usd", 0.0) or 0.0),
+        reverse=True,
+    ):
+        alias = _model_alias(model)
+        cost = float(entry.get("cost_usd", 0.0) or 0.0)
+        parts.append(f"{alias} ${cost:.2f}")
+
+    suffix = f" ({', '.join(parts)})" if parts else ""
+    return (
+        f"Tokens: ${total_cost:.2f} total · "
+        f"{in_tok} in / {out_tok} out · "
+        f"{calls} calls{suffix}"
+    )
+
+
+# Compact display names for the per-model parenthetical in the summary line.
+# Anything not in the map falls back to the raw model identifier.
+_MODEL_ALIASES: dict[str, str] = {
+    "claude-sonnet-4-6": "sonnet",
+    "claude-haiku-4-5-20251001": "haiku",
+    "gpt-4o": "gpt-4o",
+    "gpt-4o-mini": "gpt-4o-mini",
+}
+
+
+def _model_alias(model: str) -> str:
+    """Return the short label used in the run-end summary line."""
+    return _MODEL_ALIASES.get(model, model)
 
 
 def _write_reports(
@@ -310,6 +362,14 @@ def main() -> None:
     initial_state = _build_initial_state(cfg, run_id, ts)
 
     final_state, node_timings, run_duration = _run_pipeline(graph, initial_state, run_id, ts)
+
+    # Capture token usage AFTER the pipeline finishes so #61 / #62 can render
+    # the per-model and per-node breakdown straight from final_state.
+    # Lazy import keeps the graph-free codepaths (e.g. `python -m pytest`)
+    # off the usage_tracker import unless they actually run a pipeline.
+    from providers.llm import usage_tracker
+    final_state["token_usage"] = usage_tracker.snapshot()
+    logger.info(_format_token_summary(final_state["token_usage"]))
 
     _write_reports(final_state, node_timings, run_duration, run_id, ts, logger)
 

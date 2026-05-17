@@ -8,6 +8,7 @@ subscription and want to use those tokens instead, use the
 import os
 
 from providers.llm.base import BaseLLMProvider
+from providers.llm.usage_tracker import UsageCaptureHandler
 
 
 class AnthropicProvider(BaseLLMProvider):
@@ -28,9 +29,13 @@ class AnthropicProvider(BaseLLMProvider):
         # want to pay for when the user chose a different provider.
         from langchain_anthropic import ChatAnthropic
 
+        # Attach the usage-capture callback at construction so every LLM call
+        # routed through this model records its token counts and cost into
+        # the module-level UsageTracker singleton.
         return ChatAnthropic(
             model=self.model,
             max_tokens=self.max_tokens,
             temperature=self.temperature,
             anthropic_api_key=self.api_key,
+            callbacks=[UsageCaptureHandler(default_model=self.model)],
         )

@@ -37,6 +37,7 @@ from agent.nodes.search_jobs import run as search_jobs
 from agent.nodes.send_notifications import run as send_notifications
 from agent.nodes.store_results import run as store_results
 from agent.state import AgentState
+from providers.llm import usage_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +50,14 @@ def _safe(node_fn, name: str):
     The wrapped function logs the traceback at ERROR level (so it ends up in
     the log file) and appends a brief one-line error to ``state["errors"]``
     so the dashboard can mark the node as failed without losing prior work.
+
+    It also sets/unsets the current node name on the usage tracker so every
+    LLM call made inside this node gets attributed to it in the per-node
+    cost breakdown. The unset in ``finally`` guarantees attribution doesn't
+    leak past a node crash.
     """
     def wrapper(state: AgentState) -> AgentState:
+        usage_tracker.set_node(name)
         try:
             return node_fn(state)
         except Exception as exc:
@@ -58,6 +65,8 @@ def _safe(node_fn, name: str):
             errors = list(state.get("errors", []))
             errors.append(f"Node '{name}' crashed: {exc}")
             return {**state, "errors": errors}
+        finally:
+            usage_tracker.set_node(None)
 
     # Preserve the node name so the dashboard's per-node lookup still works.
     wrapper.__name__ = name

@@ -46,3 +46,8 @@ class AgentState(TypedDict):
     # ── Audit (accumulated by every node) ───────────────────────────────────
     errors: list[str]
     run_log: list[str]
+
+    # ── Observability (populated at run end from usage_tracker.snapshot) ────
+    # Shape: {"by_model": {...}, "by_node": {...}, "grand_total": {...}}.
+    # Empty dict until run.py writes the final snapshot.
+    token_usage: dict
