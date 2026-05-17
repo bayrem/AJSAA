@@ -24,6 +24,7 @@ Graph topology::
                                                              END
 """
 import logging
+from typing import Any, Callable
 
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -42,6 +43,72 @@ from providers.llm import usage_tracker
 logger = logging.getLogger(__name__)
 
 
+# ── Live-monitor registration ────────────────────────────────────────────────
+#
+# The graph module must NOT import ``LiveMonitor`` directly — that would pull
+# the http.server stack into every test that builds a graph in isolation
+# (search_jobs / analyze_jobs etc.). Instead we expose a tiny register that
+# ``run.py`` populates with a callable; the wrapper calls it when present,
+# skips it when not. Anything duck-typed with ``update_state(dict)`` works.
+
+_LiveStateWriter = Callable[[dict], None]
+_current_live_writer: _LiveStateWriter | None = None
+
+
+def set_live_state_writer(writer: _LiveStateWriter | None) -> None:
+    """Register (or clear) the live-state writer called after each node.
+
+    ``writer`` receives a snapshot dict shaped per the live-monitor schema.
+    Pass ``None`` to disable — tests that don't care about the live view, and
+    the ``--no-monitor`` codepath, both leave this unset.
+    """
+    global _current_live_writer
+    _current_live_writer = writer
+
+
+# Same canonical order used by run.py / scripts.report — duplicating the list
+# locally avoids a circular import at module-load time.
+_NODE_ORDER = [
+    "load_context", "convert_cvs", "generate_queries", "search_jobs",
+    "search_companies", "analyze_jobs", "store_results", "send_notifications",
+]
+
+
+def _build_live_snapshot(
+    state: Any,
+    current_node: str,
+    status: str,
+    node_status: dict[str, str],
+) -> dict[str, Any]:
+    """Assemble the dict pushed to the live monitor after each node.
+
+    Reads the live token-usage snapshot lazily so the live page sees the same
+    cost numbers the TUI footer is showing.
+    """
+    return {
+        "run_id": state.get("run_id", "unknown"),
+        "timestamp": state.get("timestamp", ""),
+        "status": status,
+        "current_node": current_node,
+        "node_status": dict(node_status),
+        "node_timings": {},  # populated by run.py — graph has no clock
+        "kpis": {
+            "raw_jobs": len(state.get("raw_jobs", [])),
+            "scored_jobs": len(state.get("scored_jobs", [])),
+            "stored_count": state.get("stored_count", 0),
+        },
+        "token_usage": usage_tracker.snapshot(),
+        "errors": list(state.get("errors", [])),
+        "scored_jobs": list(state.get("scored_jobs", [])),
+    }
+
+
+# Per-graph-build node-status accumulator. Reset by ``build_graph`` so each
+# pipeline run starts from a clean slate; the wrapper mutates it in place as
+# nodes complete.
+_node_status: dict[str, str] = {}
+
+
 # ── Safety wrapper ───────────────────────────────────────────────────────────
 
 def _safe(node_fn, name: str):
@@ -58,19 +125,55 @@ def _safe(node_fn, name: str):
     """
     def wrapper(state: AgentState) -> AgentState:
         usage_tracker.set_node(name)
+        _node_status[name] = "running"
+        # Push the "running" snapshot before the node executes so the live page
+        # sees the transition immediately, not just at completion.
+        _push_live_snapshot(state, name, status="running")
         try:
-            return node_fn(state)
+            result = node_fn(state)
         except Exception as exc:
             logger.error("Node '%s' crashed: %s", name, exc, exc_info=True)
             errors = list(state.get("errors", []))
             errors.append(f"Node '{name}' crashed: {exc}")
-            return {**state, "errors": errors}
+            # AgentState is a TypedDict; ``**state`` widens to dict[str, object]
+            # under mypy. Cast back so the wrapper signature stays honest.
+            crashed: AgentState = {**state, "errors": errors}  # type: ignore[typeddict-item]
+            _node_status[name] = "error"
+            _push_live_snapshot(crashed, name, status="running")
+            return crashed
         finally:
             usage_tracker.set_node(None)
+
+        # Successful completion: mark done unless the node itself appended
+        # a new error (partial failure). The completed snapshot includes the
+        # node's own state mutations so the live page reflects fresh KPIs.
+        merged = {**state, **result}
+        prev_err = len(state.get("errors", []))
+        new_err = len(merged.get("errors", []))
+        _node_status[name] = "error" if new_err > prev_err else "complete"
+        _push_live_snapshot(merged, name, status="running")
+        return result
 
     # Preserve the node name so the dashboard's per-node lookup still works.
     wrapper.__name__ = name
     return wrapper
+
+
+def _push_live_snapshot(state: Any, current_node: str, status: str) -> None:
+    """Send a live-state snapshot to the registered writer, if any.
+
+    Swallows writer exceptions — the pipeline must NEVER fail because the
+    observability layer is broken. Logged at debug level so a real bug isn't
+    completely silent if you go looking for it.
+    """
+    writer = _current_live_writer
+    if writer is None:
+        return
+    try:
+        snapshot = _build_live_snapshot(state, current_node, status, _node_status)
+        writer(snapshot)
+    except Exception:
+        logger.debug("Live-state writer raised — continuing", exc_info=True)
 
 
 # ── Routing predicates ───────────────────────────────────────────────────────
@@ -97,6 +200,13 @@ def _needs_notifications(state: AgentState) -> str:
 
 def build_graph() -> CompiledStateGraph:
     """Construct and compile the AJSAA pipeline graph."""
+    # Reset the per-build node-status accumulator so the live page starts
+    # from a clean slate each run; otherwise re-running ``main()`` in a test
+    # would inherit "complete" markers from the previous run.
+    _node_status.clear()
+    for _n in _NODE_ORDER:
+        _node_status[_n] = "waiting"
+
     graph = StateGraph(AgentState)
 
     # Register every node wrapped in the safety net.

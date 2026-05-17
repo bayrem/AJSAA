@@ -398,10 +398,38 @@ def _write_reports(
 
 # ── Main entrypoint ──────────────────────────────────────────────────────────
 
+def _valid_port(raw: str) -> int:
+    """Argparse type: only allow unprivileged ports.
+
+    Ports < 1024 require root on Linux; > 65535 is invalid. We refuse both so
+    the user gets a clean argparse error instead of an OSError mid-boot.
+    """
+    try:
+        n = int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"port must be an integer: {raw!r}") from exc
+    if not (1024 <= n <= 65535):
+        raise argparse.ArgumentTypeError(
+            f"port must be in 1024-65535, got {n}"
+        )
+    return n
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="AJSAA — Autonomous Job Search AI Agent")
     parser.add_argument("--config", default="config.yaml", help="Path to config file")
     parser.add_argument("--dry-run", action="store_true", help="Score jobs without writing to storage")
+    parser.add_argument(
+        "--port",
+        type=_valid_port,
+        default=8765,
+        help="Live monitor port (1024-65535). Default 8765.",
+    )
+    parser.add_argument(
+        "--no-monitor",
+        action="store_true",
+        help="Disable the live HTTP monitor (TUI + post-run report still work).",
+    )
     args = parser.parse_args()
 
     cfg = _load_config(args.config)
@@ -419,22 +447,57 @@ def main() -> None:
     logger.info("=" * 60)
     logger.info("AJSAA run starting  [run_id=%s]", run_id)
 
+    # ── Live monitor boot ──────────────────────────────────────────────────
+    # Brought up BEFORE the graph runs so the page is reachable the instant
+    # the user clicks the printed URL. If --no-monitor is set we still build
+    # the graph and run the pipeline; only the HTTP server is skipped.
+    monitor = None
+    if not args.no_monitor:
+        try:
+            from scripts.live_server import LiveMonitor
+            monitor = LiveMonitor(port=args.port)
+            url = monitor.start()
+            logger.info("Live monitor: %s  (run_id=%s)", url, run_id)
+            print(f"🌐 Live monitor: {url}  (run_id={run_id})", flush=True)
+
+            # Register the writer with the graph so _safe pushes per-node
+            # snapshots. Keeps graph.py independent of http.server imports.
+            from agent.graph import set_live_state_writer
+            set_live_state_writer(monitor.update_state)
+        except RuntimeError as exc:
+            # Port-in-use is the common case here. Log and continue without
+            # the monitor — the post-run report is still useful.
+            logger.warning("Live monitor disabled: %s", exc)
+            monitor = None
+
     # Lazy import — the graph builds the full node import chain
-    from agent.graph import build_graph
+    from agent.graph import build_graph, set_live_state_writer
     graph = build_graph()
     initial_state = _build_initial_state(cfg, run_id, ts)
 
-    final_state, node_timings, run_duration = _run_pipeline(graph, initial_state, run_id, ts)
+    try:
+        final_state, node_timings, run_duration = _run_pipeline(graph, initial_state, run_id, ts)
 
-    # Capture token usage AFTER the pipeline finishes so #61 / #62 can render
-    # the per-model and per-node breakdown straight from final_state.
-    # Lazy import keeps the graph-free codepaths (e.g. `python -m pytest`)
-    # off the usage_tracker import unless they actually run a pipeline.
-    from providers.llm import usage_tracker
-    final_state["token_usage"] = usage_tracker.snapshot()
-    logger.info(_format_token_summary(final_state["token_usage"]))
+        # Capture token usage AFTER the pipeline finishes so #61 / #62 can render
+        # the per-model and per-node breakdown straight from final_state.
+        # Lazy import keeps the graph-free codepaths (e.g. `python -m pytest`)
+        # off the usage_tracker import unless they actually run a pipeline.
+        from providers.llm import usage_tracker
+        final_state["token_usage"] = usage_tracker.snapshot()
+        logger.info(_format_token_summary(final_state["token_usage"]))
 
-    _write_reports(final_state, node_timings, run_duration, run_id, ts, logger)
+        _write_reports(final_state, node_timings, run_duration, run_id, ts, logger)
+
+        # Push the final snapshot so anyone still watching the live page sees
+        # the completed state. Status reflects whether any node errored.
+        if monitor is not None:
+            _push_final_state(monitor, final_state, node_timings)
+    finally:
+        # Detach the writer regardless of how we exit so a follow-up test or
+        # interactive re-run doesn't accidentally call a torn-down monitor.
+        set_live_state_writer(None)
+        if monitor is not None:
+            monitor.stop()
 
     logger.info("Run complete — %d new jobs stored", final_state.get("stored_count", 0))
     if final_state.get("errors"):
@@ -444,6 +507,31 @@ def main() -> None:
 
     if final_state.get("errors"):
         sys.exit(1)
+
+
+def _push_final_state(monitor, final_state: dict, node_timings: dict) -> None:
+    """Push the run-end snapshot to the monitor with terminal status.
+
+    Status is ``"failed"`` if any errors accumulated, else ``"complete"``.
+    The live page's JS poll will see this and stop polling.
+    """
+    status = "failed" if final_state.get("errors") else "complete"
+    monitor.update_state({
+        "run_id": final_state.get("run_id", "unknown"),
+        "timestamp": final_state.get("timestamp", ""),
+        "status": status,
+        "current_node": None,
+        "node_status": {n: "complete" for n in NODE_ORDER if n in node_timings},
+        "node_timings": dict(node_timings),
+        "kpis": {
+            "raw_jobs": len(final_state.get("raw_jobs", [])),
+            "scored_jobs": len(final_state.get("scored_jobs", [])),
+            "stored_count": final_state.get("stored_count", 0),
+        },
+        "token_usage": final_state.get("token_usage", {}),
+        "errors": list(final_state.get("errors", [])),
+        "scored_jobs": list(final_state.get("scored_jobs", [])),
+    })
 
 
 if __name__ == "__main__":

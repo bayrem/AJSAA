@@ -186,13 +186,103 @@ def _node_row_html(name: str, node_timings: dict) -> str:
     return f"<tr><td>{name}</td><td>{status}</td><td>{time_str}</td></tr>"
 
 
-def generate_run_report(state: dict, duration_s: float, node_timings: dict) -> Path:
-    """Write logs/runs/run_{ts}_{run_id}.html and return the path."""
-    _RUNS_DIR.mkdir(parents=True, exist_ok=True)
+_LIVE_PAGE_CSS = (
+    "body{font-family:system-ui,sans-serif;max-width:900px;margin:40px auto;padding:0 20px;color:#212529;}"
+    "h1{font-size:20px;margin-bottom:4px;}"
+    ".meta{color:#6c757d;font-size:13px;margin-bottom:24px;}"
+    "table{width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;}"
+    "th{background:#f8f9fa;text-align:left;padding:8px 10px;border-bottom:2px solid #dee2e6;}"
+    "td{padding:7px 10px;border-bottom:1px solid #f0f0f0;}"
+    ".errors{background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:12px;margin-bottom:24px;}"
+    "h2{font-size:16px;margin:24px 0 12px;}"
+    "a{color:#0d6efd;text-decoration:none;}"
+    ".badge{display:inline-block;padding:3px 10px;border-radius:12px;color:#fff;"
+    "font-size:12px;font-weight:bold;margin-left:8px;vertical-align:middle;}"
+    ".badge-running{background:#0d6efd;animation:pulse 1.4s ease-in-out infinite;}"
+    ".badge-complete{background:#28a745;}"
+    ".badge-failed{background:#dc3545;}"
+    "@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}"
+)
+
+
+# Pure-vanilla JS poll. Replaces #dashboard innerHTML each second from the
+# JSON snapshot served at /state.json. Stops on first non-"running" status.
+# Kept inline (no external CDN) because the page is served on 127.0.0.1
+# without internet assumptions — also fewer moving parts to secure.
+_LIVE_POLL_JS = """<script>
+(function(){
+  function badgeHtml(status){
+    var cls = 'badge-' + (status || 'running');
+    var label = (status || 'running').toUpperCase();
+    return '<span class="badge ' + cls + '">' + label + '</span>';
+  }
+  function escapeHtml(s){
+    return String(s || '').replace(/[&<>"']/g, function(c){
+      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+    });
+  }
+  function renderNodeRows(state){
+    var order = ['load_context','convert_cvs','generate_queries','search_jobs',
+                 'search_companies','analyze_jobs','store_results','send_notifications'];
+    var ns = state.node_status || {};
+    var nt = state.node_timings || {};
+    var rows = '';
+    for (var i=0; i<order.length; i++){
+      var name = order[i];
+      var st = ns[name] || 'waiting';
+      var t = nt[name];
+      var glyph = st === 'complete' ? '✓' : st === 'error' ? '✗'
+                : st === 'running' ? '⟳' : '○';
+      var timeStr = (typeof t === 'number') ? t.toFixed(1) + 's' : '—';
+      rows += '<tr><td>' + escapeHtml(name) + '</td><td>' + glyph
+           +  '</td><td>' + timeStr + '</td></tr>';
+    }
+    return rows;
+  }
+  function tick(){
+    fetch('/state.json', {cache: 'no-store'})
+      .then(function(r){ return r.json(); })
+      .then(function(state){
+        var badge = document.getElementById('status-badge');
+        if (badge) badge.outerHTML = '<span id="status-badge">' + badgeHtml(state.status) + '</span>';
+        var tbody = document.getElementById('pipeline-rows');
+        if (tbody) tbody.innerHTML = renderNodeRows(state);
+        if ((state.status || 'running') !== 'running') return;
+        setTimeout(tick, 1000);
+      })
+      .catch(function(){ setTimeout(tick, 2000); });
+  }
+  tick();
+})();
+</script>"""
+
+
+def _badge_html(status: str) -> str:
+    """Render the header status pill (running/complete/failed)."""
+    safe = status if status in ("running", "complete", "failed") else "running"
+    label = _html.escape(safe.upper())
+    return f'<span class="badge badge-{safe}">{label}</span>'
+
+
+def render_dashboard_html(
+    state: dict,
+    duration_s: float,
+    node_timings: dict,
+    live: bool = False,
+    status: str = "complete",
+) -> str:
+    """Build the dashboard HTML string used by both the live page and the static report.
+
+    The two callers differ only by:
+      - ``live=True``  embeds the JS poll block; ``status`` defaults to "running" in this case.
+      - ``live=False`` writes the JS block as empty string; ``status`` is "complete" or "failed".
+
+    Kept in one function so the live page and the post-run static report can't
+    drift visually. Both versions use the same CSS, table layout, token block,
+    and job-card markup.
+    """
     run_id = state.get("run_id", "unknown")
     ts = state.get("timestamp", "")
-    ts_file = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_path = _RUNS_DIR / f"run_{ts_file}_{run_id}.html"
 
     scored = state.get("scored_jobs", [])
     sorted_jobs = sorted(scored, key=lambda j: j.get("score", 0), reverse=True)
@@ -201,37 +291,29 @@ def generate_run_report(state: dict, duration_s: float, node_timings: dict) -> P
     job_cards = "\n".join(_job_card_html(j) for j in sorted_jobs)
     node_rows = "\n".join(_node_row_html(n, node_timings) for n in _NODE_ORDER)
     errors_display = "none" if not errors else "block"
-    errors_list = "\n".join(f"<li>{e}</li>" for e in errors)
+    errors_list = "\n".join(f"<li>{_html.escape(str(e))}</li>" for e in errors)
     no_jobs_msg = "" if sorted_jobs else '<p style="color:#6c757d">No jobs stored this run.</p>'
-    # ``token_usage`` may be missing entirely (older states) or empty ({}) when
-    # the run made no LLM calls — both are handled by _token_block_html.
     token_block = _token_block_html(state.get("token_usage") or {})
+    poll_js = _LIVE_POLL_JS if live else ""
+    badge = _badge_html(status)
 
-    html = "\n".join([
+    parts = [
         "<!DOCTYPE html>",
         '<html lang="en">',
         "<head>",
         '<meta charset="utf-8">',
-        f"<title>AJSAA Run {run_id}</title>",
-        "<style>",
-        "body{font-family:system-ui,sans-serif;max-width:900px;margin:40px auto;padding:0 20px;color:#212529;}",
-        "h1{font-size:20px;margin-bottom:4px;}",
-        ".meta{color:#6c757d;font-size:13px;margin-bottom:24px;}",
-        "table{width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;}",
-        "th{background:#f8f9fa;text-align:left;padding:8px 10px;border-bottom:2px solid #dee2e6;}",
-        "td{padding:7px 10px;border-bottom:1px solid #f0f0f0;}",
-        ".errors{background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:12px;margin-bottom:24px;}",
-        "h2{font-size:16px;margin:24px 0 12px;}",
-        "a{color:#0d6efd;text-decoration:none;}",
-        "</style>",
+        f"<title>AJSAA Run {_html.escape(str(run_id))}</title>",
+        f"<style>{_LIVE_PAGE_CSS}</style>",
         "</head>",
         "<body>",
-        f"<h1>AJSAA — Run {run_id}</h1>",
-        f'<div class="meta">{ts} · Duration: {_fmt_duration(duration_s)} · Jobs stored: {state.get("stored_count", 0)}</div>',
+        f'<h1>AJSAA — Run {_html.escape(str(run_id))} <span id="status-badge">{badge}</span></h1>',
+        f'<div class="meta">{_html.escape(str(ts))} · Duration: {_fmt_duration(duration_s)} '
+        f'· Jobs stored: {state.get("stored_count", 0)}</div>',
+        '<div id="dashboard">',
         "<h2>Pipeline</h2>",
         "<table>",
         "<thead><tr><th>Node</th><th>Status</th><th>Time</th></tr></thead>",
-        "<tbody>",
+        '<tbody id="pipeline-rows">',
         node_rows,
         "</tbody></table>",
         token_block,
@@ -241,10 +323,28 @@ def generate_run_report(state: dict, duration_s: float, node_timings: dict) -> P
         f"<h2>Jobs stored this run ({len(sorted_jobs)})</h2>",
         job_cards,
         no_jobs_msg,
+        "</div>",
+        poll_js,
         "</body>",
         "</html>",
-    ])
+    ]
+    return "\n".join(parts)
 
+
+def generate_run_report(state: dict, duration_s: float, node_timings: dict) -> Path:
+    """Write logs/runs/run_{ts}_{run_id}.html and return the path.
+
+    Static post-run variant — calls :func:`render_dashboard_html` with
+    ``live=False`` so the JS poll block is omitted and the page is a durable
+    artefact.
+    """
+    _RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    run_id = state.get("run_id", "unknown")
+    ts_file = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_path = _RUNS_DIR / f"run_{ts_file}_{run_id}.html"
+
+    status = "failed" if state.get("errors") else "complete"
+    html = render_dashboard_html(state, duration_s, node_timings, live=False, status=status)
     out_path.write_text(html, encoding="utf-8")
     return out_path
 
