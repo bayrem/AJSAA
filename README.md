@@ -69,10 +69,10 @@ python3 -m venv .venv
 # Drop a PDF or .md file into query/resume/
 
 # 4. Run
-infisical run --env=development -- python run.py
+infisical run --env=dev -- python run.py
 
 # Dry-run (scores jobs without writing to storage)
-infisical run --env=development -- python run.py --dry-run
+infisical run --env=dev -- python run.py --dry-run
 ```
 
 ## Configuration
