@@ -13,10 +13,7 @@
 .vscode/
 
 # Logs — runtime outputs, never commit
-logs/*.log
-logs/index.html
-logs/runs.json
-logs/runs/
+logs/
 
 # Python
 __pycache__/
