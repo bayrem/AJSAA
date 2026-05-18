@@ -495,7 +495,7 @@ def main() -> None:
     if args.dry_run:
         # Force local storage so we never accidentally write to the user's
         # Google Sheet during a dry run.
-        cfg["storage"]["provider"] = "local"
+        cfg.setdefault("storage", {})["provider"] = "local"
         logger.info("Dry-run mode — storage writes disabled")
 
     logger.info("=" * 60)

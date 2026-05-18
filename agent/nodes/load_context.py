@@ -156,7 +156,7 @@ def run(state: AgentState) -> AgentState:
         run_log.append(f"Loaded {len(raw_queries)} queries from {QUERIES_FILE}")
     else:
         # Empty raw_queries triggers generate_queries to call the LLM
-        run_log.append("No job_queries.md found — LLM will generate queries from CVs")
+        run_log.append("No job_queries.md found — generate_queries will build from search_config.yaml")
 
     # ── Companies (read from config, not from company_list.md) ──────────────
     raw_companies = state["config"].get("companies", [])
