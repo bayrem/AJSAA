@@ -1,18 +1,13 @@
 """Tests for agent/nodes/generate_queries — deterministic cross-product generation."""
 import hashlib
-from pathlib import Path
 from unittest.mock import patch
-
-import pytest
 
 from agent.nodes.generate_queries import (
     _build_queries,
     _cached_hash,
-    _sha256_of_file,
     _write_queries_file,
     run,
 )
-
 
 # ── _build_queries ────────────────────────────────────────────────────────────
 

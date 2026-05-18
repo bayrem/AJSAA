@@ -1,8 +1,6 @@
 """Tests for providers/search/dedup — semantic_deduplicate()."""
-import pytest
 
 from providers.search.dedup import DEDUP_THRESHOLD, semantic_deduplicate
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 

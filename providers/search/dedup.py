@@ -9,7 +9,6 @@ comparison so minor formatting differences don't cause false negatives.
 """
 from difflib import SequenceMatcher
 
-
 DEDUP_THRESHOLD = 0.85
 
 
