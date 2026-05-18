@@ -21,7 +21,6 @@ from pathlib import Path
 # Run from project root
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import yaml
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -45,7 +44,8 @@ def _load_state(jobs_path: str) -> dict:
         raw = json.loads(jobs_file.read_text(encoding="utf-8"))
         scored_jobs = sorted(raw, key=lambda j: j.get("score", 0), reverse=True)
 
-    cfg = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))
+    from run import _load_config
+    cfg = _load_config()
     meta = _load_meta()
 
     return {

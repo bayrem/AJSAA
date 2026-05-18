@@ -1,0 +1,20 @@
+search:
+  max_results_per_query: 10
+  recency_days: 3               # Only return jobs posted within this many days
+  validate_urls: true           # HEAD-check each job URL before storing; drops 4xx responses
+  enable_job_boards: true
+  enable_company_pages: true
+
+# ── User-defined CV paths ─────────────────────────────────────────────────────
+# Populated by issue #70. Leave stub in place so the merge step doesn't error.
+# cvs:
+#   - query/resume/cv1_ai_enablement.md
+
+# ── Target companies ──────────────────────────────────────────────────────────
+# Populated by issue #71. Leave stub in place so the merge step doesn't error.
+# companies: []
+
+# ── Target locations ──────────────────────────────────────────────────────────
+# locations:
+#   - Paris
+#   - Remote

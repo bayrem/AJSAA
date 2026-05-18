@@ -1,11 +1,3 @@
-# DEPRECATED — this file is no longer read by run.py.
-# Configuration has moved to the config/ folder:
-#   config/config.yaml        — infrastructure (LLM, connectors, storage, notifications, logging)
-#   config/search_config.yaml — user search preferences (recency, results, locations, cvs)
-#   config/score_config.yaml  — scoring settings (mode, thresholds, profiles)
-# This file is kept in place for backwards compatibility only.
-# Once you have verified the config/ folder is complete, you can delete this file.
-
 agent:
   name: AJSAA
   version: "2.0.0"
@@ -20,17 +12,9 @@ llm:
   timeout: 120                  # seconds — used by claude_code_agent only
 
 search:
-  max_results_per_query: 10
-  recency_days: 3               # Only return jobs posted within this many days
-  validate_urls: true           # HEAD-check each job URL before storing; drops 4xx responses
-  enable_job_boards: true
-  enable_company_pages: true
-  # Connectors run in order. Each entry can be a plain name (string) or a config object.
-  # Object fields (all optional):
-  #   enabled: true/false          — set false to skip without removing from config
-  #   fallback_only: true/false    — only runs when all non-fallback connectors return 0 results
-  #   max_results_per_query: N     — overrides global max_results_per_query for this connector
-  #   max_queries: N               — run only the first N queries (saves tokens/API calls)
+  # Connector config lives here because it contains infrastructure-level settings
+  # (rate limits, concurrency, per-connector secrets). User search preferences
+  # (recency, max_results, etc.) are in search_config.yaml.
   connectors:
     # ── Real connectors (live data, no LLM tokens) ──────────────────────────
     - name: france_travail         # Official French gov API — free at francetravail.io/data/api
@@ -81,14 +65,6 @@ search:
       #   Cap on the number of queries run per board when target_boards is active.
       #   Applied as min(max_queries, max_queries_per_board) so neither cap is exceeded.
       #   Has no effect when target_boards is not set.
-
-scoring:
-  mode: llm                     # llm | static | hybrid
-  min_score: 70                 # Jobs below this score are discarded
-  max_score: 95                 # Cap — avoids inflated "perfect" scores
-  max_cvs: 5                    # Maximum number of CV profiles to load
-  uncertainty_band: [60, 80]    # hybrid: jobs in this range are re-scored by LLM
-  profiles_dir: scoring_profiles/  # hybrid/static: where per-CV profiles are stored
 
 storage:
   provider: local               # local | google_drive | onedrive | dropbox

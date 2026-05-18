@@ -1,0 +1,7 @@
+scoring:
+  mode: llm                     # llm | static | hybrid
+  min_score: 70                 # Jobs below this score are discarded
+  max_score: 95                 # Cap — avoids inflated "perfect" scores
+  max_cvs: 5                    # Maximum number of CV profiles to load
+  uncertainty_band: [60, 80]    # hybrid: jobs in this range are re-scored by LLM
+  profiles_dir: scoring_profiles/  # hybrid/static: where per-CV profiles are stored
