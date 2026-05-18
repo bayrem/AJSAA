@@ -228,4 +228,12 @@ def run(state: AgentState) -> AgentState:
     # Persist the updated hash so the next run can skip LLM discovery.
     _update_companies_hash(current_hash)
 
+    from providers.search.dedup import semantic_deduplicate
+    before = len(raw_jobs)
+    raw_jobs = semantic_deduplicate(raw_jobs)
+    removed = before - len(raw_jobs)
+    if removed:
+        run_log.append(f"[companies] Semantic dedup removed {removed} near-duplicate jobs")
+        logger.info("[companies] Semantic dedup removed %d near-duplicates", removed)
+
     return {**state, "raw_jobs": raw_jobs, "company_hints": hints, "errors": errors, "run_log": run_log}

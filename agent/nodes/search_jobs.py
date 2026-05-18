@@ -434,6 +434,15 @@ def run(state: AgentState) -> AgentState:
             seen.add(jid)
             deduped.append(job)
 
+    # Semantic pass — catches same role posted under different URLs/IDs
+    from providers.search.dedup import semantic_deduplicate
+    before_semantic = len(deduped)
+    deduped = semantic_deduplicate(deduped)
+    semantic_removed = before_semantic - len(deduped)
+    if semantic_removed:
+        run_log.append(f"Semantic dedup removed {semantic_removed} near-duplicate jobs")
+        logger.info("Semantic dedup removed %d near-duplicates", semantic_removed)
+
     run_log.append(f"Job search complete: {len(deduped)} unique jobs found")
     logger.info("Job search complete: %d unique jobs", len(deduped))
 
