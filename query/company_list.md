@@ -1,3 +1,8 @@
+# DEPRECATED — this file is no longer read by the agent.
+# Companies are now configured in config/search_config.yaml under the `companies:` key.
+# This file is kept for reference only and will be removed in a future release.
+#
+# ─────────────────────────────────────────────────────────────────────────────
 # Company Career Pages to Search
 # ─────────────────────────────────────────────────────────────────────────────
 # One company name per line. Lines starting with # are ignored.

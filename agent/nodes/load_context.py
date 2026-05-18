@@ -9,8 +9,13 @@ Behaviour notes:
     rather than parsed here, so this node stays IO-light.
   - When ``hints_cache.json`` is missing we bootstrap from
     ``hints_cache.example.json`` so first-run users get useful defaults.
-  - Comment lines (``#``) and blank lines are stripped from the query and
-    company markdown files.
+  - Companies are read from ``config.companies`` (config/search_config.yaml).
+    Three shapes are supported:
+      - plain string     → ``"Mistral AI"``
+      - hint dict        → ``{name: "Hugging Face", hint: "greenhouse:huggingface"}``
+      - url dict         → ``{name: "Criteo", url: "https://jobs.lever.co/criteo"}``
+    User-provided hint/url entries are merged into ``company_hints`` at load
+    time so ``search_companies`` can override the cache without extra logic.
 """
 import json
 import logging
@@ -27,7 +32,6 @@ logger = logging.getLogger(__name__)
 QUERY_DIR = Path("query")
 RESUME_DIR = QUERY_DIR / "resume"
 QUERIES_FILE = QUERY_DIR / "job_queries.md"
-COMPANIES_FILE = QUERY_DIR / "company_list.md"
 HINTS_CACHE_FILE = QUERY_DIR / "hints_cache.json"
 HINTS_EXAMPLE_FILE = QUERY_DIR / "hints_cache.example.json"
 
@@ -65,6 +69,49 @@ def _read_md_list(path: Path) -> list[str]:
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
+
+
+# ── Companies parsing ────────────────────────────────────────────────────────
+
+def _parse_companies(
+    raw_companies: list,
+) -> tuple[list[str], dict[str, str]]:
+    """Parse the ``companies:`` block from config into a flat list + inline hints.
+
+    Returns:
+        (company_names, inline_hints) where ``inline_hints`` maps company name
+        to the user-provided hint string. These inline hints have the highest
+        priority and will override anything stored in ``hints_cache.json``.
+
+    Supported shapes in the YAML list:
+      - Plain string: ``"Mistral AI"``
+          → name=``"Mistral AI"``, no inline hint
+      - hint dict: ``{name: "Hugging Face", hint: "greenhouse:huggingface"}``
+          → name=``"Hugging Face"``, inline_hint=``"greenhouse:huggingface"``
+      - url dict: ``{name: "Criteo", url: "https://jobs.lever.co/criteo"}``
+          → name=``"Criteo"``, inline_hint=``"url:https://jobs.lever.co/criteo"``
+    """
+    names: list[str] = []
+    inline_hints: dict[str, str] = {}
+
+    for entry in raw_companies:
+        if isinstance(entry, str):
+            names.append(entry)
+        elif isinstance(entry, dict):
+            name = entry.get("name", "").strip()
+            if not name:
+                logger.warning("Skipping company entry with missing 'name': %s", entry)
+                continue
+            names.append(name)
+            if "hint" in entry:
+                inline_hints[name] = entry["hint"]
+            elif "url" in entry:
+                url = entry["url"]
+                inline_hints[name] = f"url:{url}" if not url.startswith("url:") else url
+        else:
+            logger.warning("Skipping unrecognised company entry type: %s", type(entry).__name__)
+
+    return names, inline_hints
 
 
 # ── Graph node ───────────────────────────────────────────────────────────────
@@ -111,13 +158,24 @@ def run(state: AgentState) -> AgentState:
         # Empty raw_queries triggers generate_queries to call the LLM
         run_log.append("No job_queries.md found — LLM will generate queries from CVs")
 
-    # ── Companies ───────────────────────────────────────────────────────────
-    if COMPANIES_FILE.exists():
-        companies = _read_md_list(COMPANIES_FILE)
-        run_log.append(f"Loaded {len(companies)} companies from {COMPANIES_FILE}")
+    # ── Companies (read from config, not from company_list.md) ──────────────
+    raw_companies = state["config"].get("companies", [])
+    if raw_companies:
+        companies, inline_hints = _parse_companies(raw_companies)
+        run_log.append(f"Loaded {len(companies)} companies from search_config.yaml")
+    else:
+        inline_hints = {}
 
     # ── Hints cache ─────────────────────────────────────────────────────────
     company_hints = _load_hints_cache()
+
+    # User-provided hints (from YAML) always override the cache.
+    company_hints.update(inline_hints)
+    if inline_hints:
+        run_log.append(
+            f"Applied {len(inline_hints)} user-provided hints from config: {list(inline_hints.keys())}"
+        )
+
     hint_count = sum(1 for c in companies if c in company_hints)
     run_log.append(f"Hints cache: {hint_count}/{len(companies)} companies have hints")
     logger.info(
