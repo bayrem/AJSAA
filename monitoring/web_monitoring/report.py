@@ -410,6 +410,7 @@ try{
 </html>"""
 
 
+
 def update_index(run_id: str, timestamp: str, duration_s: float, stats: dict) -> None:
     """Rebuild logs/index.html from runs.json. Must be called after append_runs_json."""
     _LOGS_DIR.mkdir(parents=True, exist_ok=True)
