@@ -124,7 +124,7 @@ Each run produces:
 
 - **Live TUI** — Rich terminal dashboard updates in-place as the pipeline runs, showing node status, KPIs, and elapsed time per step
 - **Live web monitor** — an in-process HTTP server serves a browser-based dashboard at `http://127.0.0.1:8765/` for the duration of the run (see below)
-- **HTML report** — after every run, `logs/index.html` (run list) and `logs/runs/run_*.html` (per-run detail with job cards) are written automatically
+- **HTML report** — after every run, `logs/index.html` (run list with Chart.js time-series chart + 10-column table) and `logs/runs/run_*.html` (per-run detail with pipeline table, token/cost per node, and job cards) are written automatically
 - **Log rotation** — configurable via `logging.rotation` (`none` / `daily` / `per_run`) with a `retention` count
 
 ### Live monitor
@@ -150,7 +150,7 @@ Every LLM call is recorded with its token counts and dollar cost (issue #60). Th
 
 - **Live TUI footer** — a compact line below the dashboard table refreshes at 4 Hz: `Tokens: 14.2k in / 1.9k out · $0.42 · 8 calls`
 - **Pipeline-end log line** — one-line summary printed to stdout/log: `Tokens: $0.42 total · 12345 in / 1876 out · 8 calls (sonnet $0.31, haiku $0.11)`
-- **HTML report** — `logs/runs/run_*.html` includes a Token spend block with grand total, per-model table, and a collapsed per-node breakdown; `logs/index.html` adds a Cost column to the run list
+- **HTML report** — `logs/runs/run_*.html` includes a Token spend block with grand total, per-model table, and a collapsed per-node breakdown; the pipeline table shows **Tokens** and **Cost** columns per node; `logs/index.html` adds a Chart.js time-series chart (6 selectable Y-axis metrics) and per-run columns for Status, Tokens consumed, and Cost $
 
 Per-model and per-node totals are stored on the final state as `token_usage` (shape: `{"by_model": {...}, "by_node": {...}, "grand_total": {...}}`). Prices live in `providers/llm/pricing.py` and need a manual refresh when a vendor changes its rate card — the `# Prices verified YYYY-MM-DD` comment is the canary. Unknown models log a single warning and report `$0.00` rather than crashing.
 
