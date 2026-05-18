@@ -16,7 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from scripts import report
+from monitoring.monitoring_core.formatters import fmt_cost, fmt_tokens
+from monitoring.web_monitoring import report
 
 
 @pytest.fixture
@@ -199,84 +200,56 @@ class TestGenerateRunReport:
 
 
 class TestUpdateIndex:
-    def test_fresh_index_has_cost_column(self, in_tmp_cwd):
-        report.update_index(
-            "abc12345",
-            "2026-05-17 10:00 UTC",
-            42.5,
-            {"queries": 5, "found": 10, "passed": 6, "new_saved": 3, "errors": 0, "cost_usd": 0.42},
-        )
+    def test_fresh_index_has_correct_columns(self, in_tmp_cwd):
+        # update_index rebuilds from runs.json — append first so the run appears.
+        stats = {"queries": 5, "found": 10, "passed": 6, "new_saved": 3, "errors": 0,
+                 "cost_usd": 0.42, "tokens_total": 14000}
+        report.append_runs_json("abc12345", "2026-05-17 10:00 UTC", 42.5, stats)
+        report.update_index("abc12345", "2026-05-17 10:00 UTC", 42.5, stats)
+
         content = (in_tmp_cwd / "logs" / "index.html").read_text(encoding="utf-8")
-        assert "<th>Cost</th>" in content
+        assert "<th>Cost $</th>" in content
+        assert "<th>Tokens consumed</th>" in content
+        assert "<th>Status</th>" in content
         assert "$0.42" in content
+        assert "14k" in content
         assert "abc12345" in content
+        assert "✓ success" in content
 
-    def test_missing_cost_renders_em_dash(self, in_tmp_cwd):
-        # cost_usd missing from stats — e.g. a caller that doesn't know about
-        # the new column. We render '—' so the column stays present.
-        report.update_index(
-            "abc12345",
-            "2026-05-17 10:00 UTC",
-            42.5,
-            {"queries": 5, "found": 10, "passed": 6, "new_saved": 3, "errors": 0},
-        )
+    def test_missing_cost_and_tokens_render_em_dash(self, in_tmp_cwd):
+        # Stats without cost_usd or tokens_total — both columns must show —.
+        stats = {"queries": 5, "found": 10, "passed": 6, "new_saved": 3, "errors": 0}
+        report.append_runs_json("abc12345", "2026-05-17 10:00 UTC", 42.5, stats)
+        report.update_index("abc12345", "2026-05-17 10:00 UTC", 42.5, stats)
+
         content = (in_tmp_cwd / "logs" / "index.html").read_text(encoding="utf-8")
-        # The Cost column must still be present (header) and the row must have a placeholder.
-        assert "<th>Cost</th>" in content
-        # Last data cell before the link must be the em-dash.
-        assert "<td>—</td><td><a" in content
+        assert "<th>Cost $</th>" in content
+        # Both token and cost cells are em-dash followed by the link cell.
+        assert "<td>—</td><td>—</td><td><a" in content
 
-    def test_legacy_index_is_migrated(self, in_tmp_cwd):
-        # Simulate a pre-#61 index.html: legacy header + a row without a Cost cell.
-        logs_dir = in_tmp_cwd / "logs"
-        logs_dir.mkdir()
-        legacy = """<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="utf-8"><title>AJSAA Runs</title></head>
-<body>
-<h1>AJSAA — All Runs</h1>
-<table>
-<thead><tr><th>Run ID</th><th>Date</th><th>Duration</th><th>Queries</th><th>Found</th><th>Passed</th><th>New saved</th><th>Errors</th><th></th></tr></thead>
-<tbody>
-<tr><td>oldrun01</td><td>2026-05-01 09:00 UTC</td><td>30s</td><td>4</td><td>8</td><td>5</td><td>2</td><td>0</td><td><a href="#">→</a></td></tr>
-<!-- ROWS -->
-</tbody>
-</table>
-</body>
-</html>"""
-        (logs_dir / "index.html").write_text(legacy, encoding="utf-8")
+    def test_run_with_errors_shows_failed_status(self, in_tmp_cwd):
+        stats = {"queries": 2, "found": 5, "passed": 0, "new_saved": 0, "errors": 1,
+                 "cost_usd": 0.10, "tokens_total": 5000}
+        report.append_runs_json("err12345", "2026-05-18 09:00 UTC", 30.0, stats)
+        report.update_index("err12345", "2026-05-18 09:00 UTC", 30.0, stats)
 
-        report.update_index(
-            "abc12345",
-            "2026-05-17 10:00 UTC",
-            42.5,
-            {"queries": 5, "found": 10, "passed": 6, "new_saved": 3, "errors": 0, "cost_usd": 0.42},
-        )
-
-        content = (logs_dir / "index.html").read_text(encoding="utf-8")
-        # New header has Cost column.
-        assert "<th>Cost</th>" in content
-        # Legacy row got an em-dash inserted in the Cost slot.
-        assert "oldrun01" in content
-        assert "<td>—</td><td><a href=\"#\">→</a></td>" in content
-        # New row appears with its actual cost.
-        assert "$0.42" in content
-        # Insertion order is preserved: legacy row stays where it was; the new
-        # row is inserted just before the marker (i.e. after the legacy row in
-        # the file, since the marker sits at the bottom of <tbody>).
-        assert content.index("oldrun01") < content.index("abc12345")
-
-    def test_repeated_writes_do_not_double_migrate(self, in_tmp_cwd):
-        # Once the header has Cost, further writes must NOT add more <th>Cost</th>.
-        for run_id in ("run00001", "run00002", "run00003"):
-            report.update_index(
-                run_id,
-                "2026-05-17 10:00 UTC",
-                10.0,
-                {"queries": 1, "found": 1, "passed": 1, "new_saved": 1, "errors": 0, "cost_usd": 0.05},
-            )
         content = (in_tmp_cwd / "logs" / "index.html").read_text(encoding="utf-8")
-        assert content.count("<th>Cost</th>") == 1
+        assert "✗ failed" in content
+        assert "err12345" in content
+
+    def test_repeated_runs_all_appear_once(self, in_tmp_cwd):
+        # Rebuild-from-runs.json means all runs accumulate; header appears once.
+        for i, run_id in enumerate(("run00001", "run00002", "run00003")):
+            stats = {"queries": 1, "found": 1, "passed": 1, "new_saved": 1,
+                     "errors": 0, "cost_usd": 0.05, "tokens_total": 1000 * (i + 1)}
+            report.append_runs_json(run_id, "2026-05-17 10:00 UTC", 10.0, stats)
+            report.update_index(run_id, "2026-05-17 10:00 UTC", 10.0, stats)
+
+        content = (in_tmp_cwd / "logs" / "index.html").read_text(encoding="utf-8")
+        assert content.count("<th>Cost $</th>") == 1
+        assert "run00001" in content
+        assert "run00002" in content
+        assert "run00003" in content
 
 
 class TestFormatHelpers:
@@ -290,7 +263,7 @@ class TestFormatHelpers:
         (150_000, "150k"),
     ])
     def test_fmt_tokens(self, n, expected):
-        assert report._fmt_tokens(n) == expected
+        assert fmt_tokens(n) == expected
 
     @pytest.mark.parametrize("cost,expected", [
         (0.0, "$0.00"),
@@ -299,4 +272,4 @@ class TestFormatHelpers:
         (12.345, "$12.35"),
     ])
     def test_fmt_cost(self, cost, expected):
-        assert report._fmt_cost(cost) == expected
+        assert fmt_cost(cost) == expected

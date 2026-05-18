@@ -33,14 +33,11 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
 
-from scripts.report import render_dashboard_html
+from monitoring.web_monitoring.report import render_dashboard_html
 
 logger = logging.getLogger(__name__)
 
 
-# Empty snapshot used until ``update_state`` is called for the first time.
-# Keeps the page render path defensible — every key the JS poll references
-# exists, even mid-boot.
 _EMPTY_STATE: dict = {
     "run_id": "—",
     "timestamp": "",
@@ -74,15 +71,13 @@ class LiveMonitor:
         port: int = 8765,
         on_state: Callable[[dict], None] | None = None,
     ) -> None:
-        # Loopback-only by design. The signature accepts host for stdlib
-        # symmetry but we never honour anything else — see module docstring.
         if host != "127.0.0.1":
             raise ValueError(
                 f"LiveMonitor binds 127.0.0.1 only by design (got {host!r})"
             )
         self._host = host
         self._port = port
-        self._on_state = on_state  # optional hook (used by tests for sync barriers)
+        self._on_state = on_state
 
         self._state: dict = copy.deepcopy(_EMPTY_STATE)
         self._lock = threading.RLock()
@@ -95,9 +90,7 @@ class LiveMonitor:
     def start(self) -> str:
         """Bind the port, spawn the serve thread, return the public URL.
 
-        Raises ``RuntimeError`` with a clear message if the port is already in
-        use — silent fallthrough would mean the user thinks they're hitting
-        the new run's monitor when they're actually looking at a stale one.
+        Raises ``RuntimeError`` if the port is already in use.
         """
         if self._server is not None:
             raise RuntimeError("LiveMonitor already started")
@@ -106,7 +99,6 @@ class LiveMonitor:
         try:
             self._server = ThreadingHTTPServer((self._host, self._port), handler_factory)
         except OSError as exc:
-            # EADDRINUSE / EACCES — surface a clean message either way.
             raise RuntimeError(
                 f"port {self._port} in use — pass --port to override"
             ) from exc
@@ -126,9 +118,6 @@ class LiveMonitor:
         if self._server is None:
             return
 
-        # ``server.shutdown()`` blocks until ``serve_forever`` returns, which
-        # would deadlock if called from inside the serve thread. We call it
-        # from a fresh helper thread so the caller never blocks on a self-join.
         def _close(srv: ThreadingHTTPServer) -> None:
             try:
                 srv.shutdown()
@@ -143,23 +132,16 @@ class LiveMonitor:
     # ── state I/O ───────────────────────────────────────────────────────────
 
     def update_state(self, state: dict) -> None:
-        """Atomically replace the served state with ``state``.
-
-        Deep-copies the incoming dict so callers can't mutate the snapshot
-        after the fact; the handler also deep-copies before serialising, so
-        partial writes are impossible.
-        """
         snapshot = copy.deepcopy(state)
         with self._lock:
             self._state = snapshot
         if self._on_state is not None:
             try:
                 self._on_state(snapshot)
-            except Exception:  # pragma: no cover — test hook failures are non-fatal
+            except Exception:  # pragma: no cover
                 logger.exception("LiveMonitor on_state hook raised")
 
     def _read_state(self) -> dict:
-        """Return a deep copy of the current state for the handler to serialise."""
         with self._lock:
             return copy.deepcopy(self._state)
 
@@ -167,26 +149,17 @@ class LiveMonitor:
 # ── HTTP handler ────────────────────────────────────────────────────────────
 
 def _make_handler_factory(read_state: Callable[[], dict]):
-    """Build a request handler class bound to ``read_state``.
-
-    Done as a closure so each ``LiveMonitor`` instance gets a handler that
-    sees its own state — the stdlib server constructs one handler per request
-    and only supports class-level configuration.
-    """
-
     class _Handler(BaseHTTPRequestHandler):
-        # Silence per-request logging — it's noisy on a 1 Hz poll.
-        def log_message(self, fmt: str, *args) -> None:  # noqa: A003 — stdlib API
+        def log_message(self, fmt: str, *args) -> None:  # noqa: A003
             return
 
-        def do_GET(self) -> None:  # noqa: N802 — stdlib API
+        def do_GET(self) -> None:  # noqa: N802
             if self.path == "/state.json":
                 self._serve_state_json()
                 return
             if self.path == "/" or self.path.startswith("/?"):
                 self._serve_live_page()
                 return
-            # Anything else is 404 — we don't serve static assets.
             self.send_response(404)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
@@ -203,13 +176,10 @@ def _make_handler_factory(read_state: Callable[[], dict]):
 
         def _serve_live_page(self) -> None:
             state = read_state()
-            # Status drives the badge; default to "running" for fresh boots
-            # where update_state hasn't been called yet.
             status = state.get("status", "running")
-            duration_s = 0.0  # the live page recomputes on each tick anyway
             node_timings = state.get("node_timings", {}) or {}
             html = render_dashboard_html(
-                state, duration_s, node_timings, live=True, status=status
+                state, 0.0, node_timings, live=True, status=status
             )
             body = html.encode("utf-8")
             self.send_response(200)
@@ -224,15 +194,8 @@ def _make_handler_factory(read_state: Callable[[], dict]):
 
 # ── helpers ─────────────────────────────────────────────────────────────────
 
-
 def find_free_port() -> int:
-    """Return a free TCP port on 127.0.0.1 — used by tests to avoid clashes.
-
-    Binds to port 0 (kernel chooses), reads the assigned port, releases the
-    socket. A subsequent ``LiveMonitor`` start on that port is racy in theory
-    but reliable in practice because nothing else on a dev box is likely to
-    grab it in the millisecond between close and re-bind.
-    """
+    """Return a free TCP port on 127.0.0.1 — used by tests to avoid clashes."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
