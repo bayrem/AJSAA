@@ -16,7 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from scripts import report
+from monitoring.monitoring_core.formatters import fmt_cost, fmt_tokens
+from monitoring.web_monitoring import report
 
 
 @pytest.fixture
@@ -290,7 +291,7 @@ class TestFormatHelpers:
         (150_000, "150k"),
     ])
     def test_fmt_tokens(self, n, expected):
-        assert report._fmt_tokens(n) == expected
+        assert fmt_tokens(n) == expected
 
     @pytest.mark.parametrize("cost,expected", [
         (0.0, "$0.00"),
@@ -299,4 +300,4 @@ class TestFormatHelpers:
         (12.345, "$12.35"),
     ])
     def test_fmt_cost(self, cost, expected):
-        assert report._fmt_cost(cost) == expected
+        assert fmt_cost(cost) == expected

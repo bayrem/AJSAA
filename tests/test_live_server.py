@@ -1,4 +1,4 @@
-"""Tests for ``scripts.live_server`` (issue #62).
+"""Tests for ``monitoring.web_monitoring.live_server`` (issue #62).
 
 What's covered
 --------------
@@ -26,8 +26,8 @@ from urllib.request import urlopen
 
 import pytest
 
-from scripts import report
-from scripts.live_server import LiveMonitor, find_free_port
+from monitoring.web_monitoring import report
+from monitoring.web_monitoring.live_server import LiveMonitor, find_free_port
 
 # ── fixtures ────────────────────────────────────────────────────────────────
 
