@@ -124,10 +124,14 @@ def _write_reports(
             "new_saved": final_state.get("stored_count", 0),
             "errors": len(final_state.get("errors", [])),
             "cost_usd": float(grand_total.get("cost_usd", 0.0) or 0.0),
+            "tokens_total": sum(
+                int(grand_total.get(k) or 0)
+                for k in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+            ),
         }
         report_path = generate_run_report(final_state, run_duration, node_timings)
-        update_index(run_id, ts, run_duration, stats)
         append_runs_json(run_id, ts, run_duration, stats)
+        update_index(run_id, ts, run_duration, stats)
         logger.info("After-action report: %s", report_path)
     except Exception as e:
         logger.warning("After-action report failed: %s", e)
