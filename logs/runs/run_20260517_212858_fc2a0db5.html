@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AJSAA Run fc2a0db5</title>
+<style>body{font-family:system-ui,sans-serif;max-width:900px;margin:40px auto;padding:0 20px;color:#212529;}h1{font-size:20px;margin-bottom:4px;}.meta{color:#6c757d;font-size:13px;margin-bottom:24px;}table{width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;}th{background:#f8f9fa;text-align:left;padding:8px 10px;border-bottom:2px solid #dee2e6;}td{padding:7px 10px;border-bottom:1px solid #f0f0f0;}.errors{background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:12px;margin-bottom:24px;}h2{font-size:16px;margin:24px 0 12px;}a{color:#0d6efd;text-decoration:none;}.badge{display:inline-block;padding:3px 10px;border-radius:12px;color:#fff;font-size:12px;font-weight:bold;margin-left:8px;vertical-align:middle;}.badge-running{background:#0d6efd;animation:pulse 1.4s ease-in-out infinite;}.badge-complete{background:#28a745;}.badge-failed{background:#dc3545;}@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}</style>
+</head>
+<body>
+<h1>AJSAA — Run fc2a0db5 <span id="status-badge"><span class="badge badge-failed">FAILED</span></span></h1>
+<div class="meta">2026-05-17 21:22 UTC · Duration: 6m06s · Jobs stored: 0</div>
+<div id="dashboard">
+<h2>Pipeline</h2>
+<table>
+<thead><tr><th>Node</th><th>Status</th><th>Time</th></tr></thead>
+<tbody id="pipeline-rows">
+<tr><td>load_context</td><td>✓</td><td>0.0s</td></tr>
+<tr><td>convert_cvs</td><td>○</td><td>—</td></tr>
+<tr><td>generate_queries</td><td>✓</td><td>0.0s</td></tr>
+<tr><td>search_jobs</td><td>✓</td><td>182.6s</td></tr>
+<tr><td>search_companies</td><td>✓</td><td>2.2s</td></tr>
+<tr><td>analyze_jobs</td><td>✓</td><td>181.8s</td></tr>
+<tr><td>store_results</td><td>✓</td><td>0.0s</td></tr>
+<tr><td>send_notifications</td><td>✓</td><td>0.0s</td></tr>
+</tbody></table>
+<h2>Token spend</h2><p style="font-size:14px;margin:8px 0 16px;"><strong>Grand total:</strong> $1.60 · 1,933 in / 13,366 out · 12 calls</p><h3 style='font-size:14px;margin:16px 0 8px;'>By model</h3><table><thead><tr><th>Model</th><th>Calls</th><th>Tokens</th><th>Cost</th></tr></thead><tbody><tr><td>claude-haiku-4-5-20251001</td><td>12</td><td>15k (1.9k in / 13k out)</td><td>$1.60</td></tr></tbody></table>
+<div class="errors" style="display:block">
+<strong>Errors (1)</strong><ul><li>Notification failed [telegram]: TELEGRAM_BOT_TOKEN is not set — add it to your .env file (see .env.template)</li></ul>
+</div>
+<h2>Jobs stored this run (0)</h2>
+
+<p style="color:#6c757d">No jobs stored this run.</p>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,13 @@
+[
+  {
+    "run_id": "fc2a0db5",
+    "timestamp": "2026-05-17 21:22 UTC",
+    "duration_s": 366.7,
+    "queries": 13,
+    "found": 58,
+    "passed": 0,
+    "new_saved": 0,
+    "errors": 1,
+    "cost_usd": 1.600946
+  }
+]

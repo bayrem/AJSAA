@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AJSAA Runs</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:1200px;margin:40px auto;padding:0 20px;color:#212529;}
+h1{font-size:20px;margin-bottom:20px;}
+.chart-section{margin-bottom:28px;}
+.chart-controls{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:13px;}
+select{font-size:13px;padding:3px 8px;border:1px solid #ced4da;border-radius:4px;background:#fff;}
+#runs-chart{max-height:220px;}
+table{width:100%;border-collapse:collapse;font-size:13px;}
+th{background:#f8f9fa;text-align:left;padding:8px 10px;border-bottom:2px solid #dee2e6;}
+td{padding:7px 10px;border-bottom:1px solid #f0f0f0;}
+a{color:#0d6efd;text-decoration:none;}
+.ok{color:#28a745;font-weight:bold;}
+.fail{color:#dc3545;font-weight:bold;}
+</style>
+</head>
+<body>
+<h1>AJSAA — All Runs</h1>
+<div class="chart-section">
+  <div class="chart-controls">
+    <label for="metric-select">Y axis:</label>
+    <select id="metric-select">
+      <option value="runtime">Run time</option>
+      <option value="tokens">Tokens consumed</option>
+      <option value="cost">Cost $</option>
+      <option value="found">Jobs found</option>
+      <option value="scored">Jobs scored</option>
+      <option value="approved">Jobs approved</option>
+    </select>
+  </div>
+  <canvas id="runs-chart"></canvas>
+</div>
+<table>
+<thead><tr>
+  <th>Run ID</th><th>Datetime</th><th>Status</th><th>Runtime</th>
+  <th>Jobs found</th><th>Jobs scored</th><th>Jobs approved</th>
+  <th>Tokens consumed</th><th>Cost $</th><th></th>
+</tr></thead>
+<tbody>
+<tr><td>fc2a0db5</td><td>2026-05-17 21:22 UTC</td><td class="fail">✗ failed</td><td>6m06s</td><td>58</td><td>0</td><td>0</td><td>—</td><td>$1.60</td><td><a href="runs/run_20260517_212858_fc2a0db5.html">→</a></td></tr>
+</tbody>
+</table>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script>
+(function(){
+var RUNS = [{"run_id": "fc2a0db5", "timestamp": "2026-05-17 21:22 UTC", "duration_s": 366.7, "queries": 13, "found": 58, "passed": 0, "new_saved": 0, "errors": 1, "cost_usd": 1.600946}];
+var METRICS = {
+  runtime:{field:'duration_s',label:'Run time (s)'},
+  tokens:{field:'tokens_total',label:'Tokens consumed'},
+  cost:{field:'cost_usd',label:'Cost ($)'},
+  found:{field:'found',label:'Jobs found'},
+  scored:{field:'passed',label:'Jobs scored'},
+  approved:{field:'new_saved',label:'Jobs approved'},
+};
+var sorted = RUNS.slice().sort(function(a,b){return a.timestamp<b.timestamp?-1:1;});
+var chart = null;
+function buildChart(metric){
+  var m = METRICS[metric];
+  var labels = sorted.map(function(r){return r.timestamp;});
+  var data = sorted.map(function(r){return r[m.field]!=null?r[m.field]:null;});
+  if(chart){
+    chart.data.labels = labels;
+    chart.data.datasets[0].data = data;
+    chart.data.datasets[0].label = m.label;
+    chart.options.scales.y.title.text = m.label;
+    chart.update();
+    return;
+  }
+  var ctx = document.getElementById('runs-chart').getContext('2d');
+  chart = new Chart(ctx,{
+    type:'line',
+    data:{
+      labels:labels,
+      datasets:[{
+        label:m.label,data:data,
+        borderColor:'#0d6efd',
+        backgroundColor:'rgba(13,110,253,0.1)',
+        tension:0.2,spanGaps:false,pointRadius:4,
+      }],
+    },
+    options:{
+      responsive:true,
+      plugins:{legend:{display:false}},
+      scales:{
+        x:{ticks:{maxTicksLimit:12}},
+        y:{title:{display:true,text:m.label},beginAtZero:true},
+      },
+    },
+  });
+}
+try{
+  if(sorted.length>0){
+    buildChart('runtime');
+    document.getElementById('metric-select').addEventListener('change',function(){buildChart(this.value);});
+  } else {
+    document.querySelector('.chart-section').style.display='none';
+  }
+}catch(e){}
+})();
+</script>
+</body>
+</html>

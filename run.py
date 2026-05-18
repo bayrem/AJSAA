@@ -244,7 +244,6 @@ def _load_config(path: str | None = None) -> dict:
       2. If the legacy root config.yaml is still present, emit a deprecation
          warning — but do NOT load it (the config/ folder takes precedence).
     """
-    import warnings
 
     import yaml  # imported lazily so non-config code paths don't pay for it
 
@@ -260,16 +259,6 @@ def _load_config(path: str | None = None) -> dict:
         with open(file_path, encoding="utf-8") as f:
             partial = yaml.safe_load(f) or {}
         merged = _merge_dicts(merged, partial)
-
-    legacy = Path("config.yaml")
-    if legacy.exists():
-        warnings.warn(
-            "Deprecated: root config.yaml is no longer used. "
-            "Configuration is now read from the config/ folder. "
-            "You can safely delete config.yaml once you have verified config/ is complete.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
 
     return merged
 
