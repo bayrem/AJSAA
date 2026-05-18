@@ -6,8 +6,8 @@ A LangGraph-based agent that autonomously discovers, scores, and tracks job oppo
 
 ## What it does
 
-1. **Loads context** — reads your CV files (`query/resume/`) and search queries (`query/job_queries.md`)
-2. **Searches for jobs** — runs queries against real job board APIs (France Travail, Adzuna, Tavily, Brave) with an LLM fallback; searches known company ATS boards (Greenhouse, Lever, Ashby) via unauthenticated HTTP — zero LLM tokens at search time
+1. **Loads context** — reads your CV files (`query/resume/`), generates search queries deterministically from `config/search_config.yaml` (positions × locations cross-product), and loads target companies with their ATS hints
+2. **Searches for jobs** — runs queries against real job board APIs (France Travail, Adzuna, Tavily, Brave) with an LLM fallback; searches known company ATS boards (Greenhouse, Lever, Ashby) via unauthenticated HTTP — zero LLM tokens at search time; semantic deduplication across all sources removes duplicate postings
 3. **Scores matches** — batch-scores each posting against your CVs using an LLM; keeps only jobs above a configurable threshold
 4. **Stores results** — deduplicates by content-hash and writes to local JSON and/or cloud storage (Google Drive, OneDrive, Dropbox)
 5. **Notifies you** — sends a digest to Telegram, Slack, email, or WhatsApp
@@ -21,7 +21,7 @@ flowchart TD
     C -- yes --> D[convert_cvs]
     C -- no  --> E{job_queries.md?}
     D --> E
-    E -- no  --> F[generate_queries\nLLM → search strings]
+    E -- no  --> F[generate_queries\npositions × locations from search_config]
     E -- yes --> G[search_jobs\nFrance Travail · Adzuna · fallback]
     F --> G
     G --> H[search_companies\ncareer page search]
@@ -33,7 +33,7 @@ flowchart TD
     L --> M
 ```
 
-Every provider is swappable via a single line in `config.yaml` — LLM, search connectors, storage backend, and notification channels all follow the same factory pattern.
+Every provider is swappable via the `config/` files — LLM, search connectors, storage backend, and notification channels all follow the same factory pattern.
 
 ## Results so far
 
@@ -77,7 +77,17 @@ infisical run --env=dev -- python run.py --dry-run
 
 ## Configuration
 
-All behaviour lives in `config.yaml` — no code changes needed to swap providers:
+Configuration is split across three files in the `config/` folder:
+
+| File | What goes here |
+|---|---|
+| `config/config.yaml` | Infrastructure: LLM provider, connectors, storage, notifications, logging |
+| `config/search_config.yaml` | User preferences: target positions, locations, companies to monitor |
+| `config/score_config.yaml` | Scoring: thresholds, uncertainty band, profiles directory |
+
+`run.py` merges all three at startup. You only need to edit `config/search_config.yaml` for day-to-day use.
+
+**`config/config.yaml`** — swap providers without touching code:
 
 ```yaml
 llm:
@@ -88,12 +98,9 @@ search:
     - name: france_travail       # free API — francetravail.io
     - name: adzuna               # free API — developer.adzuna.com
     - name: adaptive_web         # Tavily → Brave → LLM fallback (usage-aware routing)
-      monthly_limit: 950         # per-provider threshold before switching
+      monthly_limit: 950
     - name: anthropic_web        # LLM fallback — only fires when all others return nothing
       fallback_only: true
-
-scoring:
-  min_score: 70                  # jobs below this are discarded (0–95 scale)
 
 storage:
   provider: local                # local | google_drive | onedrive | dropbox
@@ -106,17 +113,37 @@ logging:
   retention: 7
 ```
 
-**ATS company search** — for companies with known ATS boards, add entries to `query/hints_cache.json`:
+**`config/search_config.yaml`** — your search preferences:
 
-```json
-{
-  "Dataiku":    "greenhouse:dataiku",
-  "Qonto":      "lever:qonto",
-  "Alan":       "ashby:alan"
-}
+```yaml
+cvs:
+  cv1:
+    - "Senior Product Manager"
+    - "Head of Product"
+  cv2:
+    - "AI Product Manager"
+    - "Product Lead"
+
+locations:
+  - "Paris"
+  - "Remote"
+
+companies:
+  - "Mistral AI"                            # LLM discovers ATS on first run, result cached
+  - name: "Hugging Face"
+    hint: "greenhouse:huggingface"          # skips LLM — uses ATS hint directly
+  - name: "Criteo"
+    url: "https://jobs.lever.co/criteo"     # skips LLM — fetches URL directly
 ```
 
-AJSAA calls the ATS API directly (no LLM tokens) and falls back to web search for companies without a hint.
+`generate_queries` builds a deterministic cross-product of positions × locations and writes `query/job_queries.md` with a hash header — no LLM call, result cached until `search_config.yaml` changes.
+
+**`config/score_config.yaml`** — scoring thresholds:
+
+```yaml
+scoring:
+  min_score: 70                  # jobs below this are discarded (0–95 scale)
+```
 
 ## Observability
 

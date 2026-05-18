@@ -18,7 +18,7 @@ run.py
         │
         ├─ (job_queries.md exists) ──────────────────────┐
         ▼                                                 │
-  generate_queries      LLM generates search strings      │
+  generate_queries      deterministic: positions×locations from search_config  │
         │ ◄──────────────────────────────────────────────┘
         │
         ▼
@@ -63,7 +63,7 @@ Three conditional edges make the pipeline adaptive:
 Skips `convert_cvs` if no PDF files are queued. On most runs, CVs are already `.md` files and this node is bypassed entirely.
 
 **`_needs_generate_queries`**
-Skips LLM query generation if `query/job_queries.md` exists. Users who maintain that file save ~1,200 tokens per run and get deterministic search strings.
+Skips regeneration if `query/job_queries.md` exists and its hash header matches the current `config/search_config.yaml` hash. When the search config changes, the file is regenerated deterministically (positions × locations cross-product) — no LLM call.
 
 **`_needs_notifications`**
 Skips `send_notifications` if no channels are configured or `notifications.enabled` is `false`.
@@ -101,14 +101,21 @@ AJSAA/
 │   ├── search/               Job board connectors
 │   ├── storage/              Persistence backends
 │   └── notifications/        Notification channels
+├── config/
+│   ├── config.yaml           Infrastructure: LLM, connectors, storage, notifications
+│   ├── search_config.yaml    User preferences: positions, locations, companies
+│   └── score_config.yaml     Scoring thresholds and profiles
 ├── query/
-│   ├── job_queries.md        Search strings (one per line)
-│   ├── company_list.md       Companies to check career pages
+│   ├── job_queries.md        Auto-generated search strings (do not edit manually)
+│   ├── company_list.md       Deprecated — use config/search_config.yaml companies: block
 │   └── resume/               CV files — gitignored
+├── providers/
+│   └── search/
+│       └── dedup.py          Semantic deduplication across connectors (difflib)
 ├── templates/
 │   └── cv_template.md        Canonical CV schema
 ├── docs/                     This documentation
 ├── tests/                    pytest suite
-├── config.yaml               Behavioural config
+├── config.yaml               Legacy root config — deprecated, triggers warning on load
 └── run.py                    Entry point
 ```
