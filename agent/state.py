@@ -25,7 +25,7 @@ class AgentState(TypedDict):
     # ── Input layer (populated by load_context) ─────────────────────────────
     cvs: list[dict]          # [{"name": str, "content": str, "path": str}]
     raw_queries: list[str]   # Lines from query/job_queries.md (before generation)
-    companies: list[str]     # Lines from query/company_list.md
+    companies: list[str]     # Loaded from config/search_config.yaml companies: block
     company_hints: dict      # {company: hint} loaded from query/hints_cache.json
     pdf_paths: list[str]     # PDF files found in query/resume/ (converted by convert_cvs)
 

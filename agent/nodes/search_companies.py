@@ -1,4 +1,4 @@
-"""Search career pages for companies listed in ``query/company_list.md``.
+"""Search career pages for companies listed in ``config/search_config.yaml``.
 
 Each company is routed via a hint stored in ``query/hints_cache.json``:
 
@@ -11,7 +11,15 @@ Each company is routed via a hint stored in ``query/hints_cache.json``:
   - missing key
         → call the LLM once to discover the career page URL, persist the
           result so we never pay for that discovery again.
+
+Hash-based skip:
+  A ``_companies_hash`` key is stored alongside hints in ``hints_cache.json``.
+  When the hash of the current companies block matches the stored hash, we skip
+  LLM discovery for any company that already has a cached hint. User-provided
+  hints (from YAML) always take priority over both the cache and this skip.
 """
+import hashlib
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,19 +58,38 @@ Return a JSON array where each item has:
 Return [] if no relevant positions found. Return only the JSON array, nothing else."""
 
 
-def _save_hint(company: str, hint: str) -> None:
-    """Persist a single hint, preserving the rest of the cache.
+def _compute_companies_hash(companies: list[str]) -> str:
+    """Return a short SHA-256 digest of the sorted company names list.
 
-    Underscore-prefixed keys (e.g. ``_comment``) in the cache file are example
-    annotations from ``hints_cache.example.json`` — they're stripped on read
-    so we don't accidentally treat them as company names.
+    Sorting before hashing means order changes in the YAML don't invalidate
+    the cache, which is almost always the right behaviour.
     """
+    payload = json.dumps(sorted(companies), separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+def _load_raw_cache() -> dict:
+    """Load the full hints cache dict, including underscore-prefixed metadata keys."""
     raw = _HINTS_CACHE.load()
     if not isinstance(raw, dict):
-        raw = {}
-    cache = {k: v for k, v in raw.items() if not k.startswith("_")}
-    cache[company] = hint
-    _HINTS_CACHE.save(cache)
+        return {}
+    return raw
+
+
+def _save_hint(company: str, hint: str, companies_hash: str) -> None:
+    """Persist a single hint and keep ``_companies_hash`` up to date."""
+    raw = _load_raw_cache()
+    # Preserve existing metadata keys; update company entry and hash.
+    raw[company] = hint
+    raw["_companies_hash"] = companies_hash
+    _HINTS_CACHE.save(raw)
+
+
+def _update_companies_hash(companies_hash: str) -> None:
+    """Write the current hash to the cache without touching any hint entries."""
+    raw = _load_raw_cache()
+    raw["_companies_hash"] = companies_hash
+    _HINTS_CACHE.save(raw)
 
 
 def _discover_url(company: str, llm) -> str:
@@ -139,8 +166,22 @@ def run(state: AgentState) -> AgentState:
 
     cfg = state["config"]
     cvs = state.get("cvs", [])
+    # company_hints already has user-provided hints merged in (done by load_context).
     hints: dict = state.get("company_hints", {})
     cv_titles = ", ".join(cv["name"].replace("_", " ") for cv in cvs) or "product management, AI, data"
+
+    # ── Hash-based skip: if the companies list hasn't changed, skip LLM
+    #    discovery for companies that already have a cached hint. User-provided
+    #    hints (already in `hints`) always take priority regardless.
+    current_hash = _compute_companies_hash(companies)
+    raw_cache = _load_raw_cache()
+    cached_hash = raw_cache.get("_companies_hash", "")
+    hash_matches = (current_hash == cached_hash)
+
+    if hash_matches:
+        run_log.append(f"[companies] Cache hash match ({current_hash[:8]}…) — skipping discovery for cached companies")
+    else:
+        run_log.append("[companies] Cache hash changed — will re-check uncached companies")
 
     try:
         from providers.llm.factory import build_llm
@@ -155,11 +196,20 @@ def run(state: AgentState) -> AgentState:
             hint = hints.get(company)
 
             if hint is None:
-                logger.info("[companies] '%s' — no hint, discovering career page...", company)
-                hint = _discover_url(company, llm)
-                _save_hint(company, hint)
-                hints[company] = hint
-                run_log.append(f"[companies] '{company}' discovered hint: {hint}")
+                # Only invoke LLM if the hash changed or this company was never cached.
+                cached_entry = raw_cache.get(company)
+                if hash_matches and cached_entry is not None:
+                    hint = cached_entry
+                    hints[company] = hint
+                    run_log.append(f"[companies] '{company}' hint from cache (hash match): {hint}")
+                else:
+                    logger.info("[companies] '%s' — no hint, discovering career page...", company)
+                    hint = _discover_url(company, llm)
+                    _save_hint(company, hint, current_hash)
+                    hints[company] = hint
+                    run_log.append(f"[companies] '{company}' discovered hint: {hint}")
+            else:
+                run_log.append(f"[companies] '{company}' using hint: {hint}")
 
             if hint == "none":
                 run_log.append(f"[companies] '{company}' skipped (hint=none)")
@@ -174,5 +224,16 @@ def run(state: AgentState) -> AgentState:
         except Exception as e:
             errors.append(f"Company search failed for '{company}': {e}")
             logger.error("Company search failed for '%s': %s", company, e)
+
+    # Persist the updated hash so the next run can skip LLM discovery.
+    _update_companies_hash(current_hash)
+
+    from providers.search.dedup import semantic_deduplicate
+    before = len(raw_jobs)
+    raw_jobs = semantic_deduplicate(raw_jobs)
+    removed = before - len(raw_jobs)
+    if removed:
+        run_log.append(f"[companies] Semantic dedup removed {removed} near-duplicate jobs")
+        logger.info("[companies] Semantic dedup removed %d near-duplicates", removed)
 
     return {**state, "raw_jobs": raw_jobs, "company_hints": hints, "errors": errors, "run_log": run_log}

@@ -25,43 +25,47 @@ Place your CV in `query/resume/` as a `.md` file. Use `templates/cv_template.md`
 query/resume/cv_technical_pm.md
 ```
 
-**2. Set your search queries**
+**2. Configure your search**
 
-Edit `query/job_queries.md`. One query per line, `#` for comments:
+Edit `config/search_config.yaml`. Set your target positions (max 2 per CV), locations, and the companies you want to monitor:
 
+```yaml
+# config/search_config.yaml
+cvs:
+  cv1:
+    - "Senior Product Manager"
+    - "Head of Product"
+
+locations:
+  - "Paris"
+  - "Remote"
+
+companies:
+  - "Mistral AI"
+  - name: "Hugging Face"
+    hint: "greenhouse:huggingface"   # skip LLM — use ATS hint directly
 ```
-# query/job_queries.md
-Technical Product Manager Paris
-Data Product Manager remote France
-AI Product Manager plateforme données
-```
 
-If this file is absent, AJSAA generates queries from your CV automatically.
+AJSAA builds a cross-product of positions × locations and writes `query/job_queries.md` automatically — no manual editing needed.
 
 **3. Configure the LLM provider**
 
 The default uses the Claude CLI (no API key needed if you have Claude Pro):
 
 ```yaml
-# config.yaml
+# config/config.yaml
 llm:
   provider: claude_code_agent
 ```
 
-To use the Anthropic API directly, set `provider: anthropic` and add `ANTHROPIC_API_KEY` to `.env`.
+To use the Anthropic API directly, set `provider: anthropic` and add `ANTHROPIC_API_KEY` to your Infisical secrets.
 
 **4. Configure notifications**
 
-Telegram is the simplest channel to set up. Get a bot token from [@BotFather](https://t.me/botfather) and find your chat ID:
-
-```bash
-# In .env
-TELEGRAM_BOT_TOKEN=your-token
-TELEGRAM_CHAT_ID=your-chat-id
-```
+Telegram is the simplest channel to set up. Get a bot token from [@BotFather](https://t.me/botfather) and find your chat ID, then add them to Infisical (env: dev).
 
 ```yaml
-# config.yaml
+# config/config.yaml
 notifications:
   enabled: true
   channels: [telegram]
@@ -100,14 +104,18 @@ ADZUNA_APP_KEY=your-key
 
 ## Optional: company career page search
 
-Add company names to `query/company_list.md`. AJSAA will search their career pages via LLM web search on each run:
+Add companies to the `companies:` block in `config/search_config.yaml`. Three shapes are supported:
 
+```yaml
+companies:
+  - "Doctolib"                              # LLM discovers ATS on first run, result cached
+  - name: "Dataiku"
+    hint: "greenhouse:dataiku"              # skips LLM — known ATS hint
+  - name: "Contentsquare"
+    url: "https://jobs.lever.co/contentsquare"  # skips LLM — direct URL
 ```
-# query/company_list.md
-Doctolib
-Dataiku
-Contentsquare
-```
+
+User-provided hints and URLs always override the cache. `query/company_list.md` is deprecated — if it still exists, it is ignored.
 
 ## Scheduling daily runs
 

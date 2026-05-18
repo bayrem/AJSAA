@@ -125,11 +125,11 @@ def print_table(jobs, results: dict):
 
 
 def main():
-    import yaml
     from dotenv import load_dotenv
     load_dotenv()
 
-    cfg_raw = yaml.safe_load(Path("config.yaml").read_text())
+    from run import _load_config
+    cfg_raw = _load_config()
     llm_cfg = cfg_raw["llm"]
     scoring_cfg = {
         **cfg_raw.get("scoring", {}),

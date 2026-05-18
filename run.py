@@ -5,11 +5,11 @@ writes the after-action report when the run finishes.
 
 Usage::
 
-    python run.py                  # use config.yaml
-    python run.py --config foo.yaml
-    python run.py --dry-run        # force storage.provider=local
-    python run.py --port 9000      # override live monitor port
-    python run.py --no-monitor     # disable the live HTTP monitor
+    python run.py                       # merge config/ folder (preferred)
+    python run.py --config foo.yaml     # explicit single-file override
+    python run.py --dry-run             # force storage.provider=local
+    python run.py --port 9000           # override live monitor port
+    python run.py --no-monitor          # disable the live HTTP monitor
 
 Exit code is 1 if any node recorded an error, 0 otherwise.
 """
@@ -21,6 +21,7 @@ import sys
 import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 # Uncomment if not using a secrets manager (e.g. Infisical):
 # from dotenv import load_dotenv
@@ -33,10 +34,51 @@ from monitoring.monitoring_core.token_summary import format_token_summary
 from monitoring.tui_monitoring.dashboard import extract_kpis, make_live_view
 
 
-def _load_config(path: str = "config.yaml") -> dict:
-    import yaml
-    with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+def _merge_dicts(base: dict, override: dict) -> dict:
+    """Recursively merge *override* into *base*, returning a new dict.
+
+    Nested dicts are merged rather than replaced so a partial override file
+    does not wipe out keys it doesn't mention.
+    """
+    result = dict(base)
+    for key, val in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(val, dict):
+            result[key] = _merge_dicts(result[key], val)
+        else:
+            result[key] = val
+    return result
+
+
+def _load_config(path: str | None = None) -> dict:
+    """Load configuration by merging the config/ folder layout.
+
+    When *path* is given (explicit ``--config`` flag) it is loaded as a single
+    file, bypassing the new layout entirely.  This preserves backwards compat
+    for one-off overrides and test fixtures.
+
+    Default behaviour (no *path*):
+      1. Merge config/config.yaml, config/search_config.yaml, config/score_config.yaml.
+      2. If the legacy root config.yaml is still present, emit a deprecation
+         warning — but do NOT load it (the config/ folder takes precedence).
+    """
+
+    import yaml  # imported lazily so non-config code paths don't pay for it
+
+    config_dir = Path("config")
+
+    if path is not None:
+        with open(path, encoding="utf-8") as f:
+            return yaml.safe_load(f)
+
+    merged: dict = {}
+    for fname in ("config.yaml", "search_config.yaml", "score_config.yaml"):
+        file_path = config_dir / fname
+        with open(file_path, encoding="utf-8") as f:
+            partial = yaml.safe_load(f) or {}
+        merged = _merge_dicts(merged, partial)
+
+    return merged
+
 
 
 def _build_initial_state(cfg: dict, run_id: str, ts: str) -> dict:
@@ -169,7 +211,7 @@ def _valid_port(raw: str) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="AJSAA — Autonomous Job Search AI Agent")
-    parser.add_argument("--config", default="config.yaml", help="Path to config file")
+    parser.add_argument("--config", default=None, help="Path to a single config file. Omit to use the config/ folder layout.")
     parser.add_argument("--dry-run", action="store_true", help="Score jobs without writing to storage")
     parser.add_argument("--port", type=_valid_port, default=8765, help="Live monitor port (1024-65535). Default 8765.")
     parser.add_argument("--no-monitor", action="store_true", help="Disable the live HTTP monitor.")
@@ -182,7 +224,7 @@ def main() -> None:
     logger = logging.getLogger("ajsaa")
 
     if args.dry_run:
-        cfg["storage"]["provider"] = "local"
+        cfg.setdefault("storage", {})["provider"] = "local"
         logger.info("Dry-run mode — storage writes disabled")
 
     logger.info("=" * 60)

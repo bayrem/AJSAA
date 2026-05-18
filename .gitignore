@@ -12,7 +12,7 @@
 .claude/settings.local.json
 .vscode/
 
-# Logs
+# Logs — runtime outputs, never commit
 logs/
 
 # Python
