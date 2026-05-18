@@ -5,16 +5,30 @@ search:
   enable_job_boards: true
   enable_company_pages: true
 
-# ── User-defined CV paths ─────────────────────────────────────────────────────
-# Populated by issue #70. Leave stub in place so the merge step doesn't error.
-# cvs:
-#   - query/resume/cv1_ai_enablement.md
+# ── CV-to-positions mapping ───────────────────────────────────────────────────
+# Maps each CV key to a list of target job titles (max 2 per CV used at runtime).
+cvs:
+  cv1:
+    - "Senior Product Manager"
+    - "Head of Product"
+  cv2:
+    - "AI Product Manager"
+    - "Product Lead"
 
 # ── Target companies ──────────────────────────────────────────────────────────
-# Populated by issue #71. Leave stub in place so the merge step doesn't error.
-# companies: []
+# Supports three shapes:
+#   plain string  → LLM discovers ATS on first run, result cached in hints_cache.json
+#   hint entry    → skips LLM, uses the ATS slug directly (e.g. "greenhouse:slug")
+#   url entry     → skips LLM, fetches jobs from that URL directly
+# User-provided hint/url always overrides anything in hints_cache.json.
+companies:
+  - "Mistral AI"
+  - name: "Hugging Face"
+    hint: "greenhouse:huggingface"
+  - name: "Criteo"
+    url: "https://jobs.lever.co/criteo"
 
 # ── Target locations ──────────────────────────────────────────────────────────
-# locations:
-#   - Paris
-#   - Remote
+locations:
+  - "Paris"
+  - "Remote"

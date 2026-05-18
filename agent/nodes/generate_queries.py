@@ -1,84 +1,94 @@
-"""Generate job-search queries from CV content when none are provided.
+"""Generate job-search queries deterministically from search_config.yaml.
 
-This node only runs if ``raw_queries`` is empty — i.e. the user has not
-provided ``query/job_queries.md`` and we need to bootstrap queries by asking
-the LLM to read the CVs and suggest searches.
+Produces the cross-product of (positions × locations) defined under the
+``cvs:`` and ``locations:`` keys in search_config.yaml. Positions per CV are
+capped at 2. Results are written to ``query/job_queries.md`` with a SHA-256
+hash header so the file is only regenerated when search_config.yaml changes.
 
-Output queries are written to ``state["queries"]`` so the downstream
-``search_jobs`` node has a uniform key to read from regardless of source.
+No LLM call is made. The LLM-based fallback has been removed entirely.
 """
-import json
+import hashlib
 import logging
+from itertools import product
+from pathlib import Path
 
 from agent.state import AgentState
-from providers.utils import strip_json_fence
 
 logger = logging.getLogger(__name__)
 
+_SEARCH_CONFIG_PATH = Path("config/search_config.yaml")
+_QUERIES_FILE = Path("query/job_queries.md")
 
-# Prompt asks for a *short* list of broad queries. The agent's parallel-search
-# layer multiplies these across multiple connectors, so 5-10 queries is
-# typically enough to cover the space without exploding API costs.
-PROMPT = """You are a job search expert. Based on the CV profiles below, generate {n} specific job search queries to find relevant positions.
+_HASH_PREFIX = "# hash: "
+_MAX_POSITIONS_PER_CV = 2
 
-Rules:
-- Each query should be a short search string (e.g., "AI Product Manager Paris")
-- Include job title + location when relevant
-- Focus on roles where the candidate's skills are a strong match
-- Return a JSON array of strings, nothing else
 
-CV Profiles:
-{cvs}
+def _sha256_of_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
-Return format: ["query 1", "query 2", ...]"""
+
+def _cached_hash(queries_file: Path) -> str | None:
+    """Return the hash written on line 1 of an existing queries file, or None."""
+    if not queries_file.exists():
+        return None
+    first_line = queries_file.read_text(encoding="utf-8").splitlines()[0] if queries_file.stat().st_size else ""
+    if first_line.startswith(_HASH_PREFIX):
+        return first_line[len(_HASH_PREFIX):].strip()
+    return None
+
+
+def _build_queries(cvs_cfg: dict, locations: list[str]) -> list[str]:
+    """Cross-product of (capped positions from all CVs) × locations."""
+    positions: list[str] = []
+    for cv_key in sorted(cvs_cfg):
+        cv_positions = cvs_cfg[cv_key][:_MAX_POSITIONS_PER_CV]
+        positions.extend(cv_positions)
+
+    return [f"{pos} {loc}" for pos, loc in product(positions, locations)]
+
+
+def _write_queries_file(path: Path, queries: list[str], config_hash: str) -> None:
+    lines = [f"{_HASH_PREFIX}{config_hash}", ""]
+    lines.extend(queries)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def run(state: AgentState) -> AgentState:
-    # If queries already exist from job_queries.md, skip generation entirely.
-    # We treat the file as authoritative when present.
-    if state.get("raw_queries"):
-        return {**state, "queries": state["raw_queries"]}
-
     errors = list(state.get("errors", []))
     run_log = list(state.get("run_log", []))
 
-    if not state.get("cvs"):
-        errors.append("Cannot generate queries: no CVs loaded")
+    cvs_cfg: dict = state["config"].get("cvs", {})
+    locations: list[str] = state["config"].get("locations", [])
+
+    if not cvs_cfg:
+        errors.append("generate_queries: no 'cvs' key in config — cannot build queries")
         return {**state, "queries": [], "errors": errors, "run_log": run_log}
 
-    queries: list[str] = []
-    try:
-        from langchain_core.messages import HumanMessage
+    if not locations:
+        errors.append("generate_queries: no 'locations' key in config — cannot build queries")
+        return {**state, "queries": [], "errors": errors, "run_log": run_log}
 
-        from providers.llm.factory import build_llm
+    # If queries were already loaded from job_queries.md by load_context, honour
+    # them only if the hash matches. Otherwise regenerate.
+    current_hash = _sha256_of_file(_SEARCH_CONFIG_PATH) if _SEARCH_CONFIG_PATH.exists() else ""
+    cached = _cached_hash(_QUERIES_FILE)
 
-        # Use the cheap "search" model — query generation is a simple task.
-        llm = build_llm(state["config"]["llm"], task="search")
-
-        # Truncate each CV to 2000 chars to keep the prompt size predictable.
-        cv_summaries = "\n\n---\n\n".join(
-            f"[{cv['name']}]\n{cv['content'][:2000]}" for cv in state["cvs"]
+    if cached == current_hash and cached:
+        queries = state.get("raw_queries", [])
+        run_log.append(
+            f"generate_queries: cache hit (hash {current_hash[:8]}…) — "
+            f"using {len(queries)} queries from {_QUERIES_FILE}"
         )
-        # Cap at 10 — beyond that the searches start overlapping anyway.
-        n_queries = state["config"].get("search", {}).get("max_results_per_query", 5)
-        prompt = PROMPT.format(n=min(n_queries, 10), cvs=cv_summaries)
+        logger.info("Query cache hit — reusing %d queries", len(queries))
+        return {**state, "queries": queries, "errors": errors, "run_log": run_log}
 
-        response = llm.invoke([HumanMessage(content=prompt)])
-        raw = strip_json_fence(response.content.strip())
+    queries = _build_queries(cvs_cfg, locations)
+    _write_queries_file(_QUERIES_FILE, queries, current_hash)
 
-        queries = json.loads(raw)
-        if not isinstance(queries, list):
-            raise ValueError("LLM did not return a list")
-
-        # Filter out empty strings / non-strings — defensive coding against
-        # an LLM that returns ``[null, "Real query"]`` etc.
-        queries = [q for q in queries if isinstance(q, str) and q.strip()]
-        run_log.append(f"LLM generated {len(queries)} queries from CVs")
-        logger.info("Generated %d queries from CVs", len(queries))
-
-    except Exception as e:
-        errors.append(f"Query generation failed: {e}")
-        logger.error("Query generation failed: %s", e)
-        queries = []
+    run_log.append(
+        f"generate_queries: wrote {len(queries)} queries to {_QUERIES_FILE} "
+        f"(hash {current_hash[:8]}…)"
+    )
+    logger.info("Generated %d queries → %s", len(queries), _QUERIES_FILE)
 
     return {**state, "queries": queries, "errors": errors, "run_log": run_log}
