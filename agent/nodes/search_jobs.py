@@ -372,7 +372,22 @@ def _make_job_id(job: dict) -> str:
 
 # ── Directive search (anthropic_web) ─────────────────────────────────────────
 
-_DIRECTIVE_MAX_RESULTS = 30
+_DIRECTIVE_TARGET = 30   # jobs we want after Tavily filtering
+_DIRECTIVE_LLM_MAX = 50  # URLs we ask the LLM for (buffer for Tavily drops)
+
+
+def _get_positions(state: AgentState) -> list[str]:
+    """Collect unique non-empty position strings from the cvs config block."""
+    # cvs lives at config root (from search_config.yaml), not under config.search
+    cvs_cfg = state["config"].get("cvs", {})
+    seen: set[str] = set()
+    positions: list[str] = []
+    for titles in cvs_cfg.values():
+        for t in (titles or []):
+            if t and t.strip() and t.strip() not in seen:
+                seen.add(t.strip())
+                positions.append(t.strip())
+    return positions
 
 
 def _run_directive_search(
@@ -382,50 +397,60 @@ def _run_directive_search(
     run_log: list,
     errors: list,
 ) -> list[dict]:
-    """One comprehensive search call for anthropic_web with full context.
+    """Two-step search for anthropic_web: LLM discovers URLs, Tavily validates them.
 
-    Replaces the N-query parallel loop for this connector — the LLM gets all
-    positions, locations, and company hints in a single directive prompt and
-    returns up to _DIRECTIVE_MAX_RESULTS results.
+    Step 1 — search:  LLM returns up to _DIRECTIVE_LLM_MAX URL candidates
+                      as {url, source, found_in_snippet}.
+    Step 2 — validate: Tavily extract drops hallucinated/unreachable URLs and
+                       replaces LLM snippets with real posting content.
     """
+    from providers.search.url_validator import validate_and_enrich
     from providers.search.web_search import AnthropicWebSearchProvider
 
-    cfg = state["config"]
-
-    # Collect unique non-empty positions from the cvs config block
-    cvs_cfg = cfg.get("search", {}).get("cvs", {})
-    seen_positions: set[str] = set()
-    positions: list[str] = []
-    for titles in cvs_cfg.values():
-        for t in (titles or []):
-            if t and t.strip() and t.strip() not in seen_positions:
-                seen_positions.add(t.strip())
-                positions.append(t.strip())
-
-    locations: list[str] = cfg.get("search", {}).get("locations", ["Paris"])
+    positions = _get_positions(state)
+    # locations also lives at config root
+    locations: list[str] = state["config"].get("locations", ["Paris"])
     companies: list[str] = state.get("companies", [])
     hints: dict = state.get("company_hints", {})
 
     run_log.append(
-        f"[anthropic_web] directive search: {positions} × {locations}, "
-        f"{len(companies)} companies, max {_DIRECTIVE_MAX_RESULTS}"
+        f"[anthropic_web] search: {positions} × {locations}, "
+        f"{len(companies)} companies, asking LLM for {_DIRECTIVE_LLM_MAX} URLs"
     )
 
+    # ── Step 1: search ────────────────────────────────────────────────────────
     try:
         provider = AnthropicWebSearchProvider(llm, search_cfg)
-        results = provider.search_all(
+        candidates = provider.search_all(
             positions=positions,
             locations=locations,
             companies=companies,
             hints=hints,
-            max_results=_DIRECTIVE_MAX_RESULTS,
+            max_results=_DIRECTIVE_LLM_MAX,
         )
-        run_log.append(f"[anthropic_web] → {len(results)} results")
-        logger.info("[anthropic_web] directive search → %d results", len(results))
-        return results
+        run_log.append(f"[anthropic_web] LLM returned {len(candidates)} URL candidates")
+        logger.info("[anthropic_web] LLM returned %d candidates", len(candidates))
     except Exception as e:
-        errors.append(f"Directive search failed: {e}")
-        logger.error("Directive search failed: %s", e)
+        errors.append(f"Directive search (LLM) failed: {e}")
+        logger.error("Directive search (LLM) failed: %s", e)
+        return []
+
+    if not candidates:
+        run_log.append("[anthropic_web] No URL candidates — skipping Tavily validation")
+        return []
+
+    # ── Step 2: validate ─────────────────────────────────────────────────────
+    run_log.append(f"[anthropic_web] validate: running Tavily extract on {len(candidates)} URLs")
+    try:
+        jobs = validate_and_enrich(candidates, search_cfg, max_results=_DIRECTIVE_TARGET)
+        run_log.append(
+            f"[anthropic_web] validate: {len(jobs)}/{len(candidates)} URLs passed Tavily"
+        )
+        logger.info("[anthropic_web] %d/%d URLs passed Tavily", len(jobs), len(candidates))
+        return jobs
+    except Exception as e:
+        errors.append(f"Directive search (Tavily validate) failed: {e}")
+        logger.error("Directive search (Tavily validate) failed: %s", e)
         return []
 
 
