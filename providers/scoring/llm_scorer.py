@@ -116,38 +116,50 @@ def _strip_fences(raw: str) -> str:
     return strip_json_fence(raw)
 
 
-def _parse_with_retry(llm, raw: str) -> list[ScoredJob] | None:
+def _is_prose(raw: str) -> bool:
+    """Return True if the response looks like prose rather than JSON.
+
+    Prose always starts with a letter; JSON always starts with ``[`` or ``{``.
+    Detecting this early avoids a full ``json.loads`` parse attempt and the
+    120s timeout that hits when the fix-prompt is also answered with prose.
+    """
+    stripped = raw.strip()
+    return bool(stripped) and stripped[0] not in "[{"
+
+
+def _parse_with_retry(
+    llm, raw: str, min_score: int = 70
+) -> list[ScoredJob] | None:
     """Try to parse ``raw`` as ``list[ScoredJob]``; retry once on failure.
 
-    The retry sends the original (invalid) output back to the LLM along with
-    the parsing error message — many parse failures are off-by-one bracket
-    mistakes that the model can fix when shown the error.
+    On parse failure — including prose fast-fail — sends a minimal clean
+    format-only prompt to the LLM rather than passing the broken output back.
+    Returning the broken output caused the model to respond to the prose as
+    a conversation rather than as a schema correction task.
     """
+    _CLEAN_RETRY = (
+        "Return ONLY a valid JSON array in this exact format:\n"
+        '[{"job_index": int, "best_cv": str, "score": int, '
+        '"recommendation": "APPLY|CONSIDER|SKIP", "reasoning": str}]\n'
+        f"Include only jobs with score >= {min_score}. JSON only. No explanation."
+    )
+
     for attempt in range(2):
         try:
             if not raw.strip():
-                # Empty response means the model omitted all jobs (none scored
-                # above the threshold). This is semantically correct — treat as
-                # an empty result rather than a parse error to avoid a retry
-                # that produces a conversational reply instead of JSON.
                 logger.debug("Scoring returned empty response — treating as zero qualifying jobs")
                 return []
+            if _is_prose(raw):
+                raise ValueError(f"Prose response detected (starts with {raw.strip()[:40]!r})")
             data = json.loads(strip_json_fence(raw))
             if not isinstance(data, list):
                 raise ValueError("Response is not a JSON array")
             return [ScoredJob(**item) for item in data]
         except (json.JSONDecodeError, ValidationError, ValueError) as e:
             if attempt == 0:
-                logger.warning("Scoring output invalid (%s) — retrying with fix prompt", e)
-                fix_prompt = (
-                    f"The following JSON is invalid or malformed:\n\n{raw}\n\n"
-                    f"Error: {e}\n\n"
-                    "Return only the corrected JSON array matching this schema:\n"
-                    '[{"job_index": int, "best_cv": str, "score": int, '
-                    '"recommendation": "APPLY|CONSIDER|SKIP", "reasoning": str}]'
-                )
+                logger.warning("Scoring output invalid (%s) — retrying with clean prompt", e)
                 try:
-                    response = llm.invoke([HumanMessage(content=fix_prompt)])
+                    response = llm.invoke([HumanMessage(content=_CLEAN_RETRY)])
                     raw = response.content
                 except Exception as retry_err:
                     logger.error("Fix-prompt retry failed: %s", retry_err)
@@ -170,7 +182,7 @@ def _build_prompt(batch: list[dict], cvs_text: str, min_score: int, max_score: i
     jobs_text = "\n\n".join(
         f"JOB {j}: {_sanitise(job.get('title', ''))} at {_sanitise(job.get('company', ''))}\n"
         f"Location: {_sanitise(job.get('location', ''))}\n"
-        f"Desc: {_sanitise(job.get('description', ''), max_chars=600)}"
+        f"Desc: {_sanitise(job.get('description', ''), max_chars=1000)}"
         for j, job in enumerate(batch)
     )
 
@@ -267,8 +279,16 @@ def score_jobs_batch(
     prompt = _build_prompt(jobs, cvs_text, min_score, max_score)
 
     try:
-        response = llm.invoke([HumanMessage(content=prompt)])
-        scored = _parse_with_retry(llm, response.content)
+        from langchain_core.messages import SystemMessage
+        messages = [
+            SystemMessage(content=(
+                "You are a JSON-only scoring API. "
+                "Return only a JSON array. No preamble, no explanation, no markdown."
+            )),
+            HumanMessage(content=prompt),
+        ]
+        response = llm.invoke(messages)
+        scored = _parse_with_retry(llm, response.content, min_score=min_score)
     except Exception as e:
         logger.error("Scoring call failed: %s", e)
         return []
