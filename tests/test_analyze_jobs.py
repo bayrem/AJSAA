@@ -18,17 +18,17 @@ def _make_job(title="PM", company="Acme", description="x" * 600) -> dict:
 # ── JD truncation ─────────────────────────────────────────────────────────────
 
 class TestJdTruncation:
-    def test_description_truncated_to_300_in_prompt(self):
-        """The LLM prompt must never include more than 300 chars of job description."""
+    def test_description_truncated_to_600_in_prompt(self):
+        """The LLM prompt must never include more than 600 chars of job description."""
         llm = _make_llm('[{"job_index": 0, "best_cv": "cv1", "score": 80, "recommendation": "APPLY", "reasoning": "good"}]')
-        job = _make_job(description="A" * 600)  # 600 chars, should be cut to 300
+        job = _make_job(description="A" * 1200)  # 1200 chars, should be cut to 600
 
         score_jobs_batch(llm, [job], [{"name": "cv1", "content": "PM 10yr"}], {"min_score": 70})
 
         prompt_sent = llm.invoke.call_args[0][0][0].content
-        # 300 A's should appear, but not 301
-        assert "A" * 300 in prompt_sent
-        assert "A" * 301 not in prompt_sent
+        # 600 A's should appear, but not 601
+        assert "A" * 600 in prompt_sent
+        assert "A" * 601 not in prompt_sent
 
     def test_short_description_not_padded(self):
         llm = _make_llm('[{"job_index": 0, "best_cv": "cv1", "score": 80, "recommendation": "APPLY", "reasoning": "ok"}]')
@@ -80,12 +80,12 @@ class TestScoreJobsBatch:
         result = score_jobs_batch(llm, jobs, [{"name": "cv1", "content": "PM"}], {"min_score": 70})
         assert result == []
 
-    def test_batches_of_10(self):
-        """12 jobs should produce 2 LLM calls (batch of 10 + batch of 2)."""
+    def test_single_call_for_all_jobs(self):
+        """All jobs (regardless of count) should produce exactly 1 LLM call."""
         llm = _make_llm("[]")
         jobs = [_make_job(title=f"Job {i}") for i in range(12)]
         score_jobs_batch(llm, jobs, [{"name": "cv1", "content": "PM"}], {"min_score": 70})
-        assert llm.invoke.call_count == 2
+        assert llm.invoke.call_count == 1
 
     def test_malformed_llm_response_does_not_crash(self):
         llm = _make_llm("not valid json {{{{")

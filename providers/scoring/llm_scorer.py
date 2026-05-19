@@ -170,7 +170,7 @@ def _build_prompt(batch: list[dict], cvs_text: str, min_score: int, max_score: i
     jobs_text = "\n\n".join(
         f"JOB {j}: {_sanitise(job.get('title', ''))} at {_sanitise(job.get('company', ''))}\n"
         f"Location: {_sanitise(job.get('location', ''))}\n"
-        f"Desc: {_sanitise(job.get('description', ''))}"
+        f"Desc: {_sanitise(job.get('description', ''), max_chars=600)}"
         for j, job in enumerate(batch)
     )
 
@@ -237,53 +237,46 @@ def score_jobs_batch(
     jobs: list[dict],
     compressed_cvs: list[dict],
     scoring_cfg: dict,
-    batch_size: int = 10,
+    batch_size: int = 10,  # kept for backwards-compat; ignored — single call now
 ) -> list[dict]:
-    """Score ``jobs`` in batches, returning only those that pass ``min_score``.
+    """Score all ``jobs`` in a single LLM call, returning those that pass ``min_score``.
+
+    The ``batch_size`` parameter is accepted but ignored — all jobs are sent
+    in one prompt. This eliminates the N×context overhead that occurred when
+    the CLI agent read project state files before each batch.
 
     Args:
         llm: Any LangChain ``BaseChatModel``-compatible LLM.
         jobs: Input jobs (must contain at minimum ``title``, ``company``,
             ``location``, ``description``).
-        compressed_cvs: Pre-compressed CV dicts (``{"name": str, "content": str}``)
-            produced by ``providers.scoring.cv_cache``.
-        scoring_cfg: Slice of config.yaml under ``scoring``. Reads
-            ``min_score`` and ``max_score``.
-        batch_size: How many jobs to score per LLM call. Default 10 — large
-            enough to amortise the prompt cost but small enough that one
-            malformed reply doesn't lose too much work.
+        compressed_cvs: Pre-compressed CV dicts (``{"name": str, "content": str}``).
+        scoring_cfg: Slice of config under ``scoring``. Reads ``min_score``
+            and ``max_score``.
+        batch_size: Ignored. Retained so existing callers need no changes.
 
     Returns:
         List of scored job dicts (only those at or above ``min_score``).
     """
+    if not jobs:
+        return []
+
     min_score = scoring_cfg.get("min_score", 70)
     max_score = scoring_cfg.get("max_score", 95)
-
-    # Pre-format the CV block once — it's identical across every batch.
     cvs_text = "\n\n".join(f"{cv['name']}:\n{cv['content']}" for cv in compressed_cvs)
 
-    results: list[dict] = []
-    for i in range(0, len(jobs), batch_size):
-        batch = jobs[i:i + batch_size]
-        prompt = _build_prompt(batch, cvs_text, min_score, max_score)
+    prompt = _build_prompt(jobs, cvs_text, min_score, max_score)
 
-        try:
-            response = llm.invoke([HumanMessage(content=prompt)])
-            scored = _parse_with_retry(llm, response.content)
-            if scored is None:
-                logger.error(
-                    "Batch %d-%d skipped — could not parse scoring output",
-                    i, i + len(batch) - 1,
-                )
-                continue
+    try:
+        response = llm.invoke([HumanMessage(content=prompt)])
+        scored = _parse_with_retry(llm, response.content)
+    except Exception as e:
+        logger.error("Scoring call failed: %s", e)
+        return []
 
-            batch_results = _materialise_results(batch, scored, min_score, max_score)
-            results.extend(batch_results)
-            logger.info(
-                "Batch %d-%d: %d/%d jobs passed threshold",
-                i, i + len(batch) - 1, len(batch_results), len(batch),
-            )
-        except Exception as e:
-            logger.error("Batch scoring failed for jobs %d-%d: %s", i, i + len(batch) - 1, e)
+    if scored is None:
+        logger.error("Could not parse scoring output after retry")
+        return []
 
+    results = _materialise_results(jobs, scored, min_score, max_score)
+    logger.info("%d/%d jobs passed threshold (≥%d)", len(results), len(jobs), min_score)
     return results
