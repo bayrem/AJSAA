@@ -117,6 +117,20 @@ class TestTokenBlockHtml:
         assert "analyze_jobs" in html
         assert "generate_queries" in html
 
+    def test_node_row_includes_cache_tokens_in_total(self):
+        # Pipeline table total must match grand total — cache tokens were missing.
+        node_data = {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_read_input_tokens": 5000,
+            "cache_creation_input_tokens": 2000,
+            "cost_usd": 0.04,
+            "calls": 1,
+        }
+        html = report._node_row_html("search_jobs", {"search_jobs": 3.2}, {"search_jobs": node_data})
+        # 100 + 50 + 5000 + 2000 = 7150 → "7.2k"
+        assert "7.2k" in html
+
     def test_empty_token_usage_renders_placeholder(self):
         # Issue #61 acceptance: empty data must render gracefully, not crash.
         html = report._token_block_html({})

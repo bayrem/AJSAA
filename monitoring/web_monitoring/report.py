@@ -146,7 +146,9 @@ def _node_row_html(name: str, node_timings: dict, by_node: dict) -> str:
     node_data = by_node.get(name) or {}
     in_tok = safe_int(node_data.get("input_tokens"))
     out_tok = safe_int(node_data.get("output_tokens"))
-    total_tokens = in_tok + out_tok
+    cache_read = safe_int(node_data.get("cache_read_input_tokens"))
+    cache_create = safe_int(node_data.get("cache_creation_input_tokens"))
+    total_tokens = in_tok + out_tok + cache_read + cache_create
     cost = safe_float(node_data.get("cost_usd"))
     tok_str = fmt_tokens(total_tokens) if total_tokens else "—"
     cost_str = fmt_cost(cost) if cost else "—"
