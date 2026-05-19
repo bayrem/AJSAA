@@ -69,7 +69,6 @@ def _get_search_provider(name: str, llm, cfg: dict):
         ValueError: If ``name`` is not a known connector.
     """
     builders: dict[str, Callable[[], object]] = {
-        "adaptive_web": lambda: _make_adaptive_web(llm, cfg),
         "anthropic_web": lambda: _make_anthropic_web(llm, cfg),
         "apec": lambda: _make_apec(cfg),
         "linkedin": lambda: _make_linkedin(cfg),
@@ -87,11 +86,6 @@ def _get_search_provider(name: str, llm, cfg: dict):
 # Lazy import wrappers — pulled out into named functions so the dispatch
 # table stays readable and each connector pays its own import cost only when
 # actually instantiated.
-
-def _make_adaptive_web(llm, cfg):
-    from providers.search.connectors.adaptive_web import AdaptiveWebSearchProvider
-    return AdaptiveWebSearchProvider(llm, cfg)
-
 
 def _make_anthropic_web(llm, cfg):
     from providers.search.web_search import AnthropicWebSearchProvider

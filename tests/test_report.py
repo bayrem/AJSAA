@@ -98,7 +98,7 @@ class TestTokenBlockHtml:
         html = report._token_block_html(_state_with_tokens()["token_usage"])
         assert "Token spend" in html
         assert "$0.42" in html
-        assert "11,500 in" in html
+        assert "11,500 new in" in html  # exact number in grand total line
         assert "2,300 out" in html
         assert "8 calls" in html
 

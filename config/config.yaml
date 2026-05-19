@@ -43,28 +43,11 @@ search:
       enabled: false               # Requires: session cookie or undocumented API reverse-engineering
       max_results_per_query: 10
 
-    # ── Adaptive web search (Tavily → Brave → anthropic_web) ──────────────────
-    - name: adaptive_web
-      enabled: true                # Requires: TAVILY_API_KEY and/or BRAVE_SEARCH_API_KEY
-      monthly_limit: 950           # Per-provider threshold before switching (not a hard cap)
-      max_results_per_query: 5
-
-    # ── LLM fallback (costs tokens — only fires when all other connectors return nothing) ─
+    # ── LLM web search — primary discovery connector ─────────────────────────
     - name: anthropic_web
       enabled: true
-      fallback_only: true          # Skipped automatically if any non-fallback connector returns results
-      max_results_per_query: 5
-      max_queries: 5               # Cap at 5 queries to limit token consumption
-      # target_boards: [linkedin, wttj, indeed, apec]
-      #   Optional list of job boards to target. When set, each query is issued once per
-      #   board with a site:domain filter injected into the LLM search prompt (e.g.
-      #   site:linkedin.com). Supported values: linkedin, wttj, indeed, apec, glassdoor,
-      #   monster, cadremploi. Absence of this field preserves the current broad-search
-      #   behaviour exactly.
-      # max_queries_per_board: 3
-      #   Cap on the number of queries run per board when target_boards is active.
-      #   Applied as min(max_queries, max_queries_per_board) so neither cap is exceeded.
-      #   Has no effect when target_boards is not set.
+      fallback_only: false
+      max_results_per_query: 4     # 4 queries × 4 results ≈ 15 total before dedup
 
 storage:
   provider: local               # local | google_drive | onedrive | dropbox

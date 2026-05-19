@@ -73,7 +73,7 @@ def run(state: AgentState) -> AgentState:
         scored_jobs = _score_hybrid(scoring_llm, raw_jobs, cvs, compressed_cvs, scoring_cfg)
     else:  # "llm" — the default
         scored_jobs = score_jobs_batch(
-            scoring_llm, raw_jobs, compressed_cvs, scoring_cfg, batch_size=10
+            scoring_llm, raw_jobs, compressed_cvs, scoring_cfg
         )
         scored_jobs.sort(key=lambda j: j["score"], reverse=True)
 
