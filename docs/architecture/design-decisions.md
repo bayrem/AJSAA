@@ -91,15 +91,23 @@ The compression result is cached to disk, keyed by a SHA-256 content hash of the
 
 ---
 
-## Why a hybrid scoring mode?
+## Why one-shot LLM scoring from a JSONL checkpoint?
 
-LLM scoring is accurate but costs tokens on every run. Static regex scoring is free but requires an initial calibration. The hybrid mode makes the trade-off explicit:
+Scoring is decoupled from search via `query/jobs_found.jsonl`. `aggregate_jobs`
+writes the checkpoint; `analyze_jobs` reads it. This means:
 
-- **First run per CV:** LLM scores all jobs. The results are fed back to a second LLM call that distils a weighted regex profile and saves it to `scoring_profiles/`.
-- **Subsequent runs:** The static scorer handles all jobs using the saved profile — zero LLM calls for the majority of results.
-- **Borderline jobs** (score within `uncertainty_band`, default `[60, 80]`): escalated back to the LLM for a second opinion.
+- The scoring step is independently runnable (`test_node.py analyze_jobs --from <state>`)
+  without re-running the expensive search step.
+- A single LLM call covers all jobs and all CVs — no per-batch CV repetition, no
+  round-trip overhead between batches.
+- The scored output in `query/jobs_scored.jsonl` is independently inspectable before
+  it reaches the storage or notification steps.
 
-This means one full LLM scoring run to bootstrap, then near-zero LLM cost for all subsequent daily runs — with the LLM still in the loop for ambiguous cases.
+A hybrid regex-profile approach was explored but removed: the profile quality
+depended heavily on bootstrap sample size, and the complexity (profile extraction,
+borderline escalation, cache invalidation) was not worth the token savings given that
+the directive search + Tavily extract architecture already caps the job set at ~30
+unique postings per run.
 
 ---
 

@@ -85,7 +85,7 @@ Configuration is split across three files in the `config/` folder:
 |---|---|
 | `config/config.yaml` | Infrastructure: LLM provider, connectors, storage, notifications, logging |
 | `config/search_config.yaml` | User preferences: target positions, locations, companies to monitor |
-| `config/score_config.yaml` | Scoring: thresholds, uncertainty band, profiles directory |
+| `config/score_config.yaml` | Scoring: min/max score thresholds |
 
 `run.py` merges all three at startup. You only need to edit `config/search_config.yaml` for day-to-day use.
 

@@ -83,11 +83,11 @@ Each node is a pure function: it receives `AgentState`, returns an updated `Agen
 
 **Guarantees:**
 - `scored_jobs` is sorted descending by `score` on exit.
-- Every entry in `scored_jobs` has: `job_id`, `title`, `company`, `location`, `score` (int, 0–95), `best_cv`, `summary`, `recommendation`.
+- Every entry in `scored_jobs` has: `job_id`, `title`, `company`, `location`, `score` (int, 0–95), `best_cv`, `recommendation`, `reasoning`.
 - Only jobs with `score >= scoring.min_score` (default 70) appear in `scored_jobs`.
 - Scores are capped at `scoring.max_score` (default 95).
 - CV compression is read from disk cache first — unchanged CVs are not re-compressed.
-- Scoring mode is driven by `scoring.mode`: `llm`, `static`, or `hybrid`.
+- Jobs are read from `query/jobs_found.jsonl`; scored output is written to `query/jobs_scored.jsonl`.
 
 ---
 

@@ -1,6 +1,8 @@
 # Scoring
 
-AJSAA supports three scoring modes, selectable via `scoring.mode` in `config.yaml`. All modes share the same threshold, cap, and output schema.
+AJSAA scores every discovered job in a single LLM call against all loaded CV profiles.
+Jobs below `min_score` are dropped; the rest are sorted descending and written to
+`query/jobs_scored.jsonl` before being handed to the storage and notification steps.
 
 ## Score rubric
 
@@ -14,67 +16,56 @@ AJSAA supports three scoring modes, selectable via `scoring.mode` in `config.yam
 
 ---
 
-## Mode: `llm` (default)
+## How it works
 
-Every job in every run is scored by the LLM. Jobs are sent in batches of 10 alongside all compressed CVs. The LLM returns a JSON array with scores and one-sentence reasoning per job.
+```
+query/jobs_found.jsonl   ← written by aggregate_jobs
+        ↓
+  analyze_jobs node
+        ↓  (1 LLM call — all jobs + all CVs)
+        ↓
+query/jobs_scored.jsonl  ← each line = original job + score, best_cv,
+                            recommendation, reasoning
+```
 
-**When to use:** When you want maximum accuracy and don't yet have a scoring profile. Costs ~12,000 tokens per run for a typical result set.
-
-**Token cost:** ~800–1,200 per batch of 10 jobs.
+1. `analyze_jobs` reads from `query/jobs_found.jsonl` (the search checkpoint).
+2. All compressed CVs are sent alongside all job descriptions in one prompt.
+3. The LLM returns a JSON array — one entry per job that passes `min_score`.
+4. Results are sorted descending, written to `query/jobs_scored.jsonl`, and
+   passed to `store_results` via `scored_jobs` in the agent state.
 
 ---
 
-## Mode: `static`
+## Output schema per job
 
-Jobs are scored using a pre-built regex profile. No LLM calls are made during scoring.
+Each scored job dict has these fields appended to the original search fields:
 
-The static scorer computes:
-
-```
-score = 50 (baseline)
-      + sum(weight for each positive_signal that matches the job description)
-      + sum(weight for each negative_signal that matches)
-      + sum(bonus for each domain_bonus term that matches)
-
-clamped to [0, 95]
-```
-
-Pattern matching is case-insensitive and applied to the combined `title + description` text.
-
-**When to use:** After running in `hybrid` mode at least once to bootstrap a profile. Zero LLM tokens per run.
-
-**Prerequisite:** A valid `scoring_profiles/{cv_name}.json` must exist. If it doesn't, the node logs an error and returns no jobs. Run in `hybrid` mode first to generate the profile.
+| Field | Type | Description |
+|---|---|---|
+| `score` | int 0–95 | Overall fit score |
+| `best_cv` | str | Name of the CV that scored highest for this job |
+| `recommendation` | str | `APPLY`, `CONSIDER`, or `SKIP` |
+| `reasoning` | str | One-sentence justification from the LLM |
 
 ---
 
-## Mode: `hybrid`
+## Tuning thresholds
 
-The default for production use. Combines LLM accuracy on first run with static efficiency on subsequent runs.
+Controlled via `config/score_config.yaml` — no prompt editing required:
 
+```yaml
+scoring:
+  min_score: 70    # jobs below this are discarded
+  max_score: 95    # scores are capped here
 ```
-First run per CV:
-  LLM scores all jobs
-        └─ Profile extraction: top + bottom results → distilled regex profile
-        └─ Profile saved to scoring_profiles/
-
-Subsequent runs:
-  Static scorer handles all jobs
-        ├─ Score > uncertainty_band.high  → kept as-is (certain pass)
-        ├─ Score < uncertainty_band.low   → filtered as-is (certain fail)
-        └─ Score within band              → escalated to LLM for second opinion
-```
-
-**`uncertainty_band`** (default `[60, 80]`): jobs scoring in this range are re-scored by the LLM. A wider band means more LLM calls; a narrower band means only near-threshold jobs go back to the LLM.
-
-**Profile invalidation:** The profile is keyed by CV content hash. Edit your CV and the profile is automatically invalidated — the next run bootstraps a fresh profile from the new content.
-
-**When to use:** Daily production runs where you want near-zero token cost after the first bootstrap run.
 
 ---
 
 ## CV compression
 
-All scoring modes use compressed CVs to stay within token limits. Before scoring, each CV is reduced to a ~200-character summary:
+Before scoring, each CV is reduced to a ~200-character summary to stay within
+token limits. The compressed version is cached to disk by content hash —
+unchanged CVs are not re-compressed across runs.
 
 ```
 YOE: 12 years
@@ -84,7 +75,14 @@ Domain: Data platforms, AI enablement, Internal tools
 Metrics: 73% incident reduction, 99.6% SLA, ×3.5 deployment capacity
 ```
 
-The compressed version is cached to disk by content hash. Unchanged CVs are never re-compressed across runs.
+---
+
+## Customising the scoring prompt
+
+The instructions block is loaded from `query/JOB_SCORING_PROMPT.md`.
+Edit that file to change scoring philosophy, priorities, or anti-hallucination
+rules. The output schema (`job_index`, `best_cv`, `score`, `recommendation`,
+`reasoning`) is always appended by code — do not add it to the prompt file.
 
 ---
 
@@ -94,9 +92,6 @@ The compressed version is cached to disk by content hash. Unchanged CVs are neve
 |---|---|
 | CV compression — 1 CV, first run | ~800 |
 | Query generation (if no file) | ~1,200 |
-| Batch scoring — 15 jobs, 1 CV | ~6,000 |
-| Web search fallback — 5 queries | ~12,000 |
-| **Total (real connectors configured)** | **~14,000** |
-| **Total (LLM fallback, no credentials)** | **~40–50,000** |
-
-The single largest lever is registering France Travail and Adzuna credentials — it eliminates the LLM web search fallback and drops token use by ~70%.
+| One-shot scoring — 15 jobs, 1 CV | ~6,000 |
+| Web search (directive + Tavily) | ~8,000 |
+| **Total typical run** | **~16,000** |

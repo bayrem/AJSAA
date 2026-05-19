@@ -6,7 +6,7 @@ AJSAA is a daily job search pipeline that runs on a schedule, searches multiple 
 
 1. Reads your CV(s) and search preferences from the `query/` directory
 2. Queries France Travail, Adzuna, and other connectors in parallel
-3. Scores every job against your CV using an LLM (or a pre-trained static profile)
+3. Scores every job against your CV in a single LLM call
 4. Stores new matches and sends a digest with the top results
 
 A typical run takes under 2 minutes and costs ~14,000 tokens when real API connectors are configured.
@@ -17,8 +17,8 @@ A typical run takes under 2 minutes and costs ~14,000 tokens when real API conne
 - [Overview](architecture/overview.md) — how the pipeline works end to end
 - [Node Contracts](architecture/node-contracts.md) — what each step reads, writes, and guarantees
 - [Design Decisions](architecture/design-decisions.md) — the why behind every major choice
-- [Data Models](architecture/data-models.md) — AgentState, job schema, scoring profiles
-- [Scoring](architecture/scoring.md) — LLM, static, and hybrid scoring explained
+- [Data Models](architecture/data-models.md) — AgentState, job schema
+- [Scoring](architecture/scoring.md) — one-shot LLM scoring explained
 
 ### Guides
 - [Getting Started](guides/getting-started.md) — installation, config, first run
