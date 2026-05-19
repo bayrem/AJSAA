@@ -36,7 +36,6 @@ import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 # Ensure the project root is on sys.path regardless of where the script is invoked from.
 _ROOT = Path(__file__).resolve().parents[1]
