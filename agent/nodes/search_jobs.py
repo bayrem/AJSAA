@@ -370,6 +370,90 @@ def _make_job_id(job: dict) -> str:
     return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
+# ── Directive search (anthropic_web) ─────────────────────────────────────────
+
+_DIRECTIVE_TARGET = 30   # jobs we want after Tavily filtering
+_DIRECTIVE_LLM_MAX = 50  # URLs we ask the LLM for (buffer for Tavily drops)
+
+
+def _get_positions(state: AgentState) -> list[str]:
+    """Collect unique non-empty position strings from the cvs config block."""
+    # cvs lives at config root (from search_config.yaml), not under config.search
+    cvs_cfg = state["config"].get("cvs", {})
+    seen: set[str] = set()
+    positions: list[str] = []
+    for titles in cvs_cfg.values():
+        for t in (titles or []):
+            if t and t.strip() and t.strip() not in seen:
+                seen.add(t.strip())
+                positions.append(t.strip())
+    return positions
+
+
+def _run_directive_search(
+    state: AgentState,
+    llm,
+    search_cfg: dict,
+    run_log: list,
+    errors: list,
+) -> list[dict]:
+    """Two-step search for anthropic_web: LLM discovers URLs, Tavily validates them.
+
+    Step 1 — search:  LLM returns up to _DIRECTIVE_LLM_MAX URL candidates
+                      as {url, source, found_in_snippet}.
+    Step 2 — validate: Tavily extract drops hallucinated/unreachable URLs and
+                       replaces LLM snippets with real posting content.
+    """
+    from providers.search.url_validator import validate_and_enrich
+    from providers.search.web_search import AnthropicWebSearchProvider
+
+    positions = _get_positions(state)
+    # locations also lives at config root
+    locations: list[str] = state["config"].get("locations", ["Paris"])
+    companies: list[str] = state.get("companies", [])
+    hints: dict = state.get("company_hints", {})
+
+    run_log.append(
+        f"[anthropic_web] search: {positions} × {locations}, "
+        f"{len(companies)} companies, asking LLM for {_DIRECTIVE_LLM_MAX} URLs"
+    )
+
+    # ── Step 1: search ────────────────────────────────────────────────────────
+    try:
+        provider = AnthropicWebSearchProvider(llm, search_cfg)
+        candidates = provider.search_all(
+            positions=positions,
+            locations=locations,
+            companies=companies,
+            hints=hints,
+            max_results=_DIRECTIVE_LLM_MAX,
+        )
+        run_log.append(f"[anthropic_web] LLM returned {len(candidates)} URL candidates")
+        logger.info("[anthropic_web] LLM returned %d candidates", len(candidates))
+    except Exception as e:
+        errors.append(f"Directive search (LLM) failed: {e}")
+        logger.error("Directive search (LLM) failed: %s", e)
+        return []
+
+    if not candidates:
+        run_log.append("[anthropic_web] No URL candidates — skipping Tavily validation")
+        return []
+
+    # ── Step 2: validate ─────────────────────────────────────────────────────
+    run_log.append(f"[anthropic_web] validate: running Tavily extract on {len(candidates)} URLs")
+    try:
+        jobs = validate_and_enrich(candidates, search_cfg, max_results=_DIRECTIVE_TARGET)
+        run_log.append(
+            f"[anthropic_web] validate: {len(jobs)}/{len(candidates)} URLs passed Tavily"
+        )
+        logger.info("[anthropic_web] %d/%d URLs passed Tavily", len(jobs), len(candidates))
+        return jobs
+    except Exception as e:
+        errors.append(f"Directive search (Tavily validate) failed: {e}")
+        logger.error("Directive search (Tavily validate) failed: %s", e)
+        return []
+
+
 # ── Graph node ───────────────────────────────────────────────────────────────
 
 def run(state: AgentState) -> AgentState:
@@ -401,19 +485,28 @@ def run(state: AgentState) -> AgentState:
 
     recency_days = search_cfg.get("recency_days", 3)
 
-    # Primary pass — these are the connectors we always try.
-    raw_jobs.extend(_run_parallel(primary, queries, llm, search_cfg, run_log, errors, recency_days))
+    # anthropic_web gets one comprehensive directive call instead of N queries.
+    # All other connectors (france_travail, adzuna, …) keep the parallel loop.
+    directive_cfgs = [c for c in primary if c["name"] == "anthropic_web"]
+    loop_primary = [c for c in primary if c["name"] != "anthropic_web"]
+    directive_fallbacks = [c for c in fallbacks if c["name"] == "anthropic_web"]
+    loop_fallbacks = [c for c in fallbacks if c["name"] != "anthropic_web"]
 
-    # Fallback pass — only run when primary returned nothing. This is the
-    # safety net for "all my API keys broke" type situations.
-    if fallbacks:
-        if raw_jobs:
-            skipped = [c["name"] for c in fallbacks]
-            run_log.append(f"Fallback connectors skipped (primary found results): {skipped}")
-            logger.info("Fallback connectors skipped: %s", skipped)
-        else:
-            run_log.append("Primary connectors returned 0 results — activating fallbacks")
-            raw_jobs.extend(_run_parallel(fallbacks, queries, llm, search_cfg, run_log, errors, recency_days))
+    if directive_cfgs:
+        raw_jobs.extend(_run_directive_search(state, llm, search_cfg, run_log, errors))
+
+    raw_jobs.extend(_run_parallel(loop_primary, queries, llm, search_cfg, run_log, errors, recency_days))
+
+    # Fallback pass — only runs when primary produced nothing.
+    if not raw_jobs:
+        if directive_fallbacks:
+            raw_jobs.extend(_run_directive_search(state, llm, search_cfg, run_log, errors))
+        if loop_fallbacks:
+            raw_jobs.extend(_run_parallel(loop_fallbacks, queries, llm, search_cfg, run_log, errors, recency_days))
+    elif fallbacks:
+        skipped = [c["name"] for c in fallbacks]
+        run_log.append(f"Fallback connectors skipped (primary found results): {skipped}")
+        logger.info("Fallback connectors skipped: %s", skipped)
 
     # Drop month-old postings that slipped past API recency filters
     raw_jobs = _filter_recent(raw_jobs)
