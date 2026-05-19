@@ -1,11 +1,14 @@
-"""Tavily Search connector — structured web results.
+"""Tavily Search and Extract connector.
 
-Tavily returns already-extracted snippets so we don't pay a second LLM call
-to parse a results page. Used by :class:`AdaptiveWebSearchProvider` as the
-preferred web backend when ``TAVILY_API_KEY`` is set and the monthly budget
-is not exhausted.
+Two capabilities:
+  - ``search(query)``       — structured web search results (legacy, kept for
+                              backwards compat with any tests that import it).
+  - ``extract(urls)``       — fetch and parse full page content from a list of
+                              URLs. Used by ``AnthropicWebSearchProvider`` to
+                              validate LLM-returned job URLs and replace the
+                              LLM's description with the real posting text.
 
-Required environment variables (see ``.env.template``):
+Required environment variables:
   - ``TAVILY_API_KEY`` — register at https://tavily.com
 """
 import hashlib
@@ -14,9 +17,14 @@ import os
 import urllib.parse
 from datetime import datetime, timezone
 
+import requests as _requests
+
 from providers.search.base import BaseSearchProvider
 
 logger = logging.getLogger(__name__)
+
+_TAVILY_EXTRACT_URL = "https://api.tavily.com/extract"
+_EXTRACT_BATCH_SIZE = 20  # Tavily extract accepts up to 20 URLs per call
 
 
 def _domain_hint(url: str) -> str:
@@ -29,16 +37,57 @@ def _domain_hint(url: str) -> str:
 
 
 class TavilyConnector(BaseSearchProvider):
-    """Issue one Tavily query and convert the results to job dicts."""
+    """Tavily search and extract."""
+
+    def extract(self, urls: list[str]) -> dict[str, str]:
+        """Fetch full page content for each URL via Tavily's /extract endpoint.
+
+        Returns a dict mapping URL → raw_content for every URL that Tavily
+        could successfully parse. URLs that fail (non-existent, auth-gated,
+        or otherwise unscrapable) are absent from the returned dict — callers
+        use this absence as a drop signal.
+
+        Batches automatically at _EXTRACT_BATCH_SIZE. Returns an empty dict
+        (and logs a warning) if TAVILY_API_KEY is not set.
+        """
+        api_key = os.environ.get("TAVILY_API_KEY", "")
+        if not api_key:
+            logger.warning("TavilyConnector.extract: TAVILY_API_KEY not set — skipping")
+            return {}
+
+        content_by_url: dict[str, str] = {}
+        for i in range(0, len(urls), _EXTRACT_BATCH_SIZE):
+            batch = urls[i : i + _EXTRACT_BATCH_SIZE]
+            try:
+                resp = _requests.post(
+                    _TAVILY_EXTRACT_URL,
+                    json={"urls": batch, "api_key": api_key},
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                for result in data.get("results", []):
+                    url = result.get("url", "")
+                    content = result.get("raw_content", "")
+                    if url and content:
+                        content_by_url[url] = content
+                failed = len(data.get("failed_results", []))
+                logger.info(
+                    "Tavily extract batch %d-%d: %d ok, %d failed",
+                    i, i + len(batch), len(data.get("results", [])), failed,
+                )
+            except Exception as e:
+                logger.error("Tavily extract batch %d-%d failed: %s", i, i + len(batch), e)
+
+        return content_by_url
 
     def search(self, query: str, max_results: int = 10, **kwargs) -> list[dict]:
+        """Legacy search — returns structured results as job dicts."""
         api_key = os.environ.get("TAVILY_API_KEY", "")
         if not api_key:
             logger.warning("TavilyConnector: TAVILY_API_KEY not set — skipping")
             return []
         try:
-            # Import lazily so the tavily package is optional — the
-            # connector class can still be instantiated without it.
             from tavily import TavilyClient
             resp = TavilyClient(api_key=api_key).search(query, max_results=max_results)
         except Exception as e:
@@ -52,12 +101,8 @@ class TavilyConnector(BaseSearchProvider):
                 "job_id": hashlib.sha256(url.encode()).hexdigest()[:16],
                 "title": r.get("title", ""),
                 "company": _domain_hint(url),
-                # Tavily doesn't surface job location; we assume Paris because
-                # the only configured search queries target Paris. Downstream
-                # location filtering still applies.
                 "location": "Paris, France",
                 "url": url,
-                # Tavily snippets can be long — cap for storage size
                 "description": r.get("content", "")[:1000],
                 "source": "tavily",
                 "date_found": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
