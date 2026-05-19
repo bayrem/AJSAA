@@ -24,15 +24,9 @@ __pycache__/
 # OS
 .DS_Store
 
-# CV files (personal data)
-query/resume/*.md
-query/resume/*.pdf
-
-# Hints cache (personal — auto-generated, commit if you want to share)
-query/hints_cache.json
-
-# Adaptive web search usage counters (runtime state, resets monthly)
-query/search_usage.json
+# query/ is an internal work folder — ignore everything except the scoring prompt
+query/
+!query/JOB_SCORING_PROMPT.md
 
 # OAuth tokens (auto-generated)
 .oauth_client.json

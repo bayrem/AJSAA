@@ -126,7 +126,12 @@ def _parse_with_retry(llm, raw: str) -> list[ScoredJob] | None:
     for attempt in range(2):
         try:
             if not raw.strip():
-                raise ValueError("Empty response")
+                # Empty response means the model omitted all jobs (none scored
+                # above the threshold). This is semantically correct — treat as
+                # an empty result rather than a parse error to avoid a retry
+                # that produces a conversational reply instead of JSON.
+                logger.debug("Scoring returned empty response — treating as zero qualifying jobs")
+                return []
             data = json.loads(strip_json_fence(raw))
             if not isinstance(data, list):
                 raise ValueError("Response is not a JSON array")

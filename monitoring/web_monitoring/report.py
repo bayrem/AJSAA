@@ -30,13 +30,23 @@ def _token_block_html(token_usage: dict) -> str:
 
     g_in = safe_int(grand.get("input_tokens"))
     g_out = safe_int(grand.get("output_tokens"))
+    g_cache_read = safe_int(grand.get("cache_read_input_tokens"))
+    g_cache_create = safe_int(grand.get("cache_creation_input_tokens"))
     g_calls = safe_int(grand.get("calls"))
     g_cost = safe_float(grand.get("cost_usd"))
+    g_total = g_in + g_out + g_cache_read + g_cache_create
+
+    cache_detail = ""
+    if g_cache_read or g_cache_create:
+        cache_detail = (
+            f" · cache: {g_cache_read:,} read / {g_cache_create:,} created"
+        )
 
     grand_line = (
         f'<p style="font-size:14px;margin:8px 0 16px;">'
         f"<strong>Grand total:</strong> {fmt_cost(g_cost)} · "
-        f"{g_in:,} in / {g_out:,} out · {g_calls} calls"
+        f"{fmt_tokens(g_total)} total ({g_in:,} new in / {g_out:,} out"
+        f"{cache_detail}) · {g_calls} calls"
         "</p>"
     )
 
@@ -71,12 +81,18 @@ def _usage_row_html(name: str, entry: dict) -> str:
     calls = safe_int(entry.get("calls"))
     in_tok = safe_int(entry.get("input_tokens"))
     out_tok = safe_int(entry.get("output_tokens"))
+    cache_read = safe_int(entry.get("cache_read_input_tokens"))
+    cache_create = safe_int(entry.get("cache_creation_input_tokens"))
     cost = safe_float(entry.get("cost_usd"))
+    total = in_tok + out_tok + cache_read + cache_create
+    detail = f"{fmt_tokens(in_tok)} new in / {fmt_tokens(out_tok)} out"
+    if cache_read or cache_create:
+        detail += f" / {fmt_tokens(cache_read)} cache-read / {fmt_tokens(cache_create)} cache-create"
     return (
         "<tr>"
         f"<td>{_html.escape(str(name))}</td>"
         f"<td>{calls}</td>"
-        f"<td>{fmt_tokens(in_tok + out_tok)} ({fmt_tokens(in_tok)} in / {fmt_tokens(out_tok)} out)</td>"
+        f"<td>{fmt_tokens(total)} ({detail})</td>"
         f"<td>{fmt_cost(cost)}</td>"
         "</tr>"
     )
@@ -196,7 +212,7 @@ _LIVE_POLL_JS = """<script>
                 : st === 'running' ? '⟳' : '○';
       var timeStr = (typeof t === 'number') ? t.toFixed(1) + 's' : '—';
       var nd = bn[name] || {};
-      var toks = (nd.input_tokens||0) + (nd.output_tokens||0);
+      var toks = (nd.input_tokens||0) + (nd.output_tokens||0) + (nd.cache_read_input_tokens||0) + (nd.cache_creation_input_tokens||0);
       rows += '<tr><td>' + escapeHtml(name) + '</td><td>' + glyph
            +  '</td><td>' + timeStr + '</td><td>' + fmtTokens(toks)
            +  '</td><td>' + fmtCost(nd.cost_usd||0) + '</td></tr>';
