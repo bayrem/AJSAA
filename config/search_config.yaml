@@ -9,11 +9,11 @@ search:
 # Maps each CV key to a list of target job titles (max 2 per CV used at runtime).
 cvs:
   cv1:
-    - "Senior Product Manager"
-    - "Head of Product"
+    - "Product Manager Data AI"
+    - "Head of Product Data AI"
   cv2:
-    - "AI Product Manager"
-    - "Product Lead"
+    - ""
+    - ""
 
 # ── Target companies ──────────────────────────────────────────────────────────
 # Supports three shapes:

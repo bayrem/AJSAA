@@ -16,7 +16,7 @@ Graph topology::
         │                           │       └──(have queries?)──> search_jobs
         │                           │
         v                           v
-    search_jobs ──> search_companies ──> analyze_jobs ──> store_results
+    search_jobs ──> search_companies ──> aggregate_jobs ──> analyze_jobs ──> store_results
                                                               │
                                                               ├──(notify enabled?)──> send_notifications
                                                               │
@@ -29,6 +29,7 @@ from typing import Any, Callable
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from agent.nodes.aggregate_jobs import run as aggregate_jobs
 from agent.nodes.analyze_jobs import run as analyze_jobs
 from agent.nodes.convert_cvs import run as convert_cvs
 from agent.nodes.generate_queries import run as generate_queries
@@ -70,7 +71,7 @@ def set_live_state_writer(writer: _LiveStateWriter | None) -> None:
 # locally avoids a circular import at module-load time.
 _NODE_ORDER = [
     "load_context", "convert_cvs", "generate_queries", "search_jobs",
-    "search_companies", "analyze_jobs", "store_results", "send_notifications",
+    "search_companies", "aggregate_jobs", "analyze_jobs", "store_results", "send_notifications",
 ]
 
 
@@ -215,6 +216,7 @@ def build_graph() -> CompiledStateGraph:
     graph.add_node("generate_queries",   _safe(generate_queries,   "generate_queries"))
     graph.add_node("search_jobs",        _safe(search_jobs,        "search_jobs"))
     graph.add_node("search_companies",   _safe(search_companies,   "search_companies"))
+    graph.add_node("aggregate_jobs",     _safe(aggregate_jobs,     "aggregate_jobs"))
     graph.add_node("analyze_jobs",       _safe(analyze_jobs,       "analyze_jobs"))
     graph.add_node("store_results",      _safe(store_results,      "store_results"))
     graph.add_node("send_notifications", _safe(send_notifications, "send_notifications"))
@@ -236,7 +238,8 @@ def build_graph() -> CompiledStateGraph:
 
     # Linear core pipeline
     graph.add_edge("search_jobs", "search_companies")
-    graph.add_edge("search_companies", "analyze_jobs")
+    graph.add_edge("search_companies", "aggregate_jobs")
+    graph.add_edge("aggregate_jobs", "analyze_jobs")
     graph.add_edge("analyze_jobs", "store_results")
 
     # Conditional: only notify if channels are configured

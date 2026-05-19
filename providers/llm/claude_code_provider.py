@@ -82,7 +82,7 @@ class ClaudeCodeChatModel(BaseChatModel):
     timeout: int = 120
     model_name: str = "claude_code_agent"
     model: str = ""              # passed via --model when truthy
-    allow_tools: bool = True     # see ClaudeCodeProvider docstring
+    allow_tools: bool = False    # see ClaudeCodeProvider docstring
 
     @property
     def _llm_type(self) -> str:
@@ -352,7 +352,7 @@ class ClaudeCodeProvider(BaseLLMProvider):
         # ``allow_tools: false`` in config disables the CLI's tool-use
         # permission flag — recommended for scoring/compression tasks that
         # never need to call MCP tools.
-        self.allow_tools = cfg.get("allow_tools", True)
+        self.allow_tools = cfg.get("allow_tools", False)
 
     def build(self) -> ClaudeCodeChatModel:
         # Sanity-check the CLI early so misconfigured deployments fail at

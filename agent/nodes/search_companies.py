@@ -43,9 +43,12 @@ DISCOVER_PROMPT = """What is the careers/jobs page URL for {company}?
 Return only the URL (e.g. https://jobs.example.com), nothing else.
 If you are not confident, return the word UNKNOWN."""
 
+MAX_RESULTS_PER_COMPANY = 5
+
 SEARCH_PROMPT = """Today is {today}. Search {scope} for open job positions at {company}.
 Only include jobs posted in the last {recency_days} days.
 Focus on roles matching these profiles: {cv_titles}
+Return at most {max_results} results.
 
 Return a JSON array where each item has:
 - title: job title
@@ -143,8 +146,9 @@ def _search_with_hint(company: str, hint: str, llm, cfg: dict, cv_titles: str) -
         company=company,
         recency_days=recency_days,
         cv_titles=cv_titles,
+        max_results=MAX_RESULTS_PER_COMPANY,
     )
-    results = provider.search_with_prompt(prompt, max_results=5)
+    results = provider.search_with_prompt(prompt, max_results=MAX_RESULTS_PER_COMPANY)
     for job in results:
         job.setdefault("company", company)
     return results
@@ -217,6 +221,7 @@ def run(state: AgentState) -> AgentState:
                 continue
 
             results = _search_with_hint(company, hint, llm, cfg, cv_titles)
+            results = results[:MAX_RESULTS_PER_COMPANY]
             raw_jobs.extend(results)
             run_log.append(f"[companies] '{company}' → {len(results)} results")
             logger.info("[companies] '%s' → %d results", company, len(results))
