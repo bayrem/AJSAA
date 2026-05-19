@@ -7,7 +7,7 @@ A LangGraph-based agent that autonomously discovers, scores, and tracks job oppo
 ## What it does
 
 1. **Loads context** — reads your CV files (`query/resume/`), generates search queries deterministically from `config/search_config.yaml` (positions × locations cross-product), and loads target companies with their ATS hints
-2. **Searches for jobs** — runs queries against real job board APIs (France Travail, Adzuna, Tavily, Brave) with an LLM fallback; searches known company ATS boards (Greenhouse, Lever, Ashby) via unauthenticated HTTP — zero LLM tokens at search time; semantic deduplication across all sources removes duplicate postings
+2. **Searches for jobs** — runs queries via LLM-powered web search (Claude web search tool); searches known company ATS boards (Greenhouse, Lever, Ashby) via unauthenticated HTTP — zero LLM tokens for ATS queries; semantic deduplication across all sources removes duplicate postings
 3. **Scores matches** — batch-scores each posting against your CVs using an LLM; keeps only jobs above a configurable threshold
 4. **Stores results** — deduplicates by content-hash and writes to local JSON and/or cloud storage (Google Drive, OneDrive, Dropbox)
 5. **Notifies you** — sends a digest to Telegram, Slack, email, or WhatsApp
@@ -22,11 +22,12 @@ flowchart TD
     C -- no  --> E{job_queries.md?}
     D --> E
     E -- no  --> F[generate_queries\npositions × locations from search_config]
-    E -- yes --> G[search_jobs\nFrance Travail · Adzuna · fallback]
+    E -- yes --> G[search_jobs\nanthropicweb LLM search]
     F --> G
-    G --> H[search_companies\ncareer page search]
-    H --> I[analyze_jobs\nbatch LLM scoring]
-    I --> J[store_results\nlocal JSON + cloud sync]
+    G --> H[search_companies\nATS direct + LLM search]
+    H --> I[aggregate_jobs\ndedup · cap · checkpoint]
+    I --> J2[analyze_jobs\nbatch LLM scoring]
+    J2 --> J[store_results\nlocal JSON + cloud sync]
     J --> K{notifications\nenabled?}
     K -- yes --> L[send_notifications\nTelegram · Slack · email]
     K -- no  --> M([END])
@@ -60,10 +61,9 @@ python3 -m venv .venv
 
 # 2. Configure secrets (project uses Infisical — no .env files)
 # Install the Infisical CLI: https://infisical.com/docs/cli/overview
-# Then add secrets to your Infisical project (env: development):
+# Then add secrets to your Infisical project (env: dev):
 #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID — for notifications
-#   FRANCE_TRAVAIL_CLIENT_ID/SECRET, ADZUNA_APP_ID/KEY — for job boards
-#   TAVILY_API_KEY, BRAVE_SEARCH_API_KEY — for adaptive web search (optional)
+#   FRANCE_TRAVAIL_CLIENT_ID/SECRET, ADZUNA_APP_ID/KEY — for job boards (optional)
 
 # 3. Add your CV
 # Drop a PDF or .md file into query/resume/
@@ -95,12 +95,10 @@ llm:
 
 search:
   connectors:
-    - name: france_travail       # free API — francetravail.io
-    - name: adzuna               # free API — developer.adzuna.com
-    - name: adaptive_web         # Tavily → Brave → LLM fallback (usage-aware routing)
-      monthly_limit: 950
-    - name: anthropic_web        # LLM fallback — only fires when all others return nothing
-      fallback_only: true
+    - name: france_travail       # free API — francetravail.io (optional)
+    - name: adzuna               # free API — developer.adzuna.com (optional)
+    - name: anthropic_web        # LLM web search — primary connector
+      max_results_per_query: 4   # 4 queries × 4 results ≈ 15 total before dedup
 
 storage:
   provider: local                # local | google_drive | onedrive | dropbox
@@ -187,7 +185,7 @@ Per-model and per-node totals are stored on the final state as `token_usage` (sh
 |---|---|
 | Orchestration | LangGraph |
 | LLM interface | LangChain (Anthropic Claude / OpenAI) |
-| Job boards | France Travail, Adzuna, Tavily, Brave Search |
+| Job boards | France Travail, Adzuna (optional), Claude web search (primary) |
 | ATS boards | Greenhouse, Lever, Ashby (unauthenticated HTTP) |
 | Terminal UI | Rich |
 | Storage | Local JSON (Google Drive / OneDrive / Dropbox) |
