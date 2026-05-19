@@ -41,7 +41,7 @@ def _build_queries(cvs_cfg: dict, locations: list[str]) -> list[str]:
     """Cross-product of (capped positions from all CVs) × locations."""
     positions: list[str] = []
     for cv_key in sorted(cvs_cfg):
-        cv_positions = cvs_cfg[cv_key][:_MAX_POSITIONS_PER_CV]
+        cv_positions = [p for p in cvs_cfg[cv_key][:_MAX_POSITIONS_PER_CV] if p and p.strip()]
         positions.extend(cv_positions)
 
     return [f"{pos} {loc}" for pos, loc in product(positions, locations)]

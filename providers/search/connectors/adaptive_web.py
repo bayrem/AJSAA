@@ -44,32 +44,39 @@ _FALLBACK_MAX = 10
 # pages, review pages). Matched against the full URL (lowercased).
 
 _BLOCKED_URL_PATTERNS: list[re.Pattern] = [re.compile(p, re.IGNORECASE) for p in [
-    # Glassdoor non-postings
+    # Glassdoor — only individual postings at /job-listing/ are useful;
+    # everything else (/Job/ listing pages, /Salaries, /Reviews…) is noise
+    r"glassdoor\.com/Job/",        # listing/search pages (capital J)
     r"glassdoor\.com/Salaries/",
     r"glassdoor\.com/Reviews/",
     r"glassdoor\.com/Interview/",
     r"glassdoor\.com/Overview/",
-    # LinkedIn search results (not individual job views)
-    r"linkedin\.com/jobs/search",
-    r"linkedin\.com/jobs/$",
+    # LinkedIn — individual views (/jobs/view/) are in the allowlist;
+    # all other /jobs/* patterns are search or category pages
+    r"linkedin\.com/jobs/(?!view/)",
+    # Indeed — all fr.indeed.com results from Brave are search/listing pages;
+    # individual postings would be at viewjob?jk= which Brave rarely surfaces
+    r"indeed\.com",
     # Aggregator search / listing pages
-    r"indeed\.com/q-",
-    r"indeed\.com/jobs\?",
     r"ziprecruiter\.com/Jobs/",
     r"monster\.com/jobs/search",
     r"simplyhired\.com/search",
     r"efinancialcareers\.com/jobs/.*in-",
     r"startup\.jobs/locations/",
-    r"builtin(colorado|austin|boston|chicago|la|nyc|seattle)?\.com/jobs/",
+    r"builtin[a-z]*\.(com|org)/jobs/",  # all builtinXXX.com/org job listing pages
+    r"wellfound\.com/role/",        # Wellfound role search pages
+    r"dailyremote\.com/",
+    r"weworkremotely\.com/remote-jobs/[^/]+$",  # listing pages (no job slug)
     # Salary / comparison aggregators
     r"salary\.com",
     r"payscale\.com",
     r"levels\.fyi",
     r"glassdoor\.com/Salaries",
-    # Generic search pages
+    # Generic search pages and listing category pages
     r"[?&]q=",
     r"/search[?/]",
     r"englishjobs\.fr/in/",
+    r"aijobs\.net/jobs-in-",    # aijobs.net category/listing pages (not individual posts)
 ]]
 
 # Patterns that strongly indicate a direct single-job posting URL.
@@ -85,19 +92,41 @@ _ALLOWLIST_PATTERNS: list[re.Pattern] = [re.compile(p, re.IGNORECASE) for p in [
     r"icims\.com/jobs/",
     r"taleo\.net/careersection/",
     r"myworkdayjobs\.com/",
+    r"welcometothejungle\.com/.*/jobs/",   # major French job board
+    r"wttj\.co/.*/jobs/",                  # short domain alias
+    r"apec\.fr/candidat/",                 # French executive job board
+    r"cadremploi\.fr/emploi/detail",       # French executive board
+    r"aijobs\.tech/",                      # French AI jobs board (all URLs are job pages)
+    r"lensa\.com/job-v\d+/",              # Lensa individual job aggregation
+    r"remoterocketship\.com/.*/jobs/",     # remote job postings
+    r"weworkremotely\.com/remote-jobs/.*/",  # individual remote postings
+    r"jobleads\.com/.*/job/",              # job aggregator individual postings
 ]]
 
 
 def _is_job_posting_url(url: str) -> bool:
-    """Return True if the URL looks like a direct single-job posting page."""
+    """Return True if the URL looks like a direct single-job posting page.
+
+    Strategy: allowlist-first, then blocklist, then path-heuristic.
+    Default is DENY — we'd rather miss a posting than extract a Wikipedia
+    article or news story and waste a Tavily extract credit.
+    """
+    # Known ATS / job-board domains → always keep
     for allow in _ALLOWLIST_PATTERNS:
         if allow.search(url):
             return True
+    # Explicitly noisy domains → always drop
     for block in _BLOCKED_URL_PATTERNS:
         if block.search(url):
             return False
-    # Default: keep it — better to extract a non-job page than to miss a posting.
-    return True
+    # For everything else: only keep if the URL path contains a job-related
+    # keyword — this catches company career pages without being in the allowlist
+    # while blocking news articles, Wikipedia, and general web content.
+    path = urllib.parse.urlparse(url).path.lower()
+    return any(kw in path for kw in (
+        "/job", "/career", "/position", "/vacancy",
+        "/opening", "/hiring", "/work-with-us",
+    ))
 
 
 # ── Content parsers ───────────────────────────────────────────────────────────
@@ -225,7 +254,10 @@ class AdaptiveWebSearchProvider(BaseSearchProvider):
         tavily = TavilyConnector(self.cfg)
 
         # Step 1: Brave search → raw results
-        raw_results = brave.search(query, max_results=max_results)
+        # Append job-specific terms so Brave understands this is a job search,
+        # and exclude noisy domains that never host actual postings.
+        brave_query = f"{query} job -wikipedia -salary -news"
+        raw_results = brave.search(brave_query, max_results=max_results)
         self._usage["brave"]["count"] += 1
         _USAGE_CACHE.save(self._usage)
 

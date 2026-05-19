@@ -38,7 +38,6 @@ class BraveConnector:
                 params={
                     "q": query,
                     "count": str(min(max_results, 20)),
-                    "freshness": "pd",          # past day — last 24h only
                     "result_filter": "web",
                 },
                 headers={
