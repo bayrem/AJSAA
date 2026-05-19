@@ -358,7 +358,7 @@ a{color:#0d6efd;text-decoration:none;}
 <thead><tr>
   <th>Run ID</th><th>Datetime</th><th>Status</th><th>Runtime</th>
   <th>Jobs found</th><th>Jobs scored</th><th>Jobs approved</th>
-  <th>Tokens consumed</th><th>Cost $</th><th></th>
+  <th>Tokens consumed</th><th>Cost $</th>
 </tr></thead>
 <tbody>
 __ROWS_HTML__
@@ -453,7 +453,7 @@ def update_index(run_id: str, timestamp: str, duration_s: float, stats: dict) ->
 
         rows.append(
             f"<tr>"
-            f"<td>{_html.escape(str(rid))}</td>"
+            f'<td><a href="{href}">{_html.escape(str(rid))}</a></td>'
             f"<td>{_html.escape(str(run.get('timestamp', '')))}</td>"
             f'<td class="{status_cls}">{status_label}</td>'
             f"<td>{fmt_duration(safe_float(run.get('duration_s', 0)))}</td>"
@@ -462,7 +462,6 @@ def update_index(run_id: str, timestamp: str, duration_s: float, stats: dict) ->
             f"<td>{safe_int(run.get('new_saved', 0))}</td>"
             f"<td>{tok_str}</td>"
             f"<td>{cost_str}</td>"
-            f'<td><a href="{href}">→</a></td>'
             f"</tr>"
         )
 

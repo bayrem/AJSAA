@@ -224,8 +224,8 @@ class TestUpdateIndex:
 
         content = (in_tmp_cwd / "logs" / "index.html").read_text(encoding="utf-8")
         assert "<th>Cost $</th>" in content
-        # Both token and cost cells are em-dash followed by the link cell.
-        assert "<td>—</td><td>—</td><td><a" in content
+        # Both token and cost cells render as em-dash; row ends there (no extra link cell).
+        assert "<td>—</td><td>—</td></tr>" in content
 
     def test_run_with_errors_shows_failed_status(self, in_tmp_cwd):
         stats = {"queries": 2, "found": 5, "passed": 0, "new_saved": 0, "errors": 1,
