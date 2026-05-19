@@ -69,7 +69,6 @@ def _get_search_provider(name: str, llm, cfg: dict):
         ValueError: If ``name`` is not a known connector.
     """
     builders: dict[str, Callable[[], object]] = {
-        "adaptive_web": lambda: _make_adaptive_web(llm, cfg),
         "anthropic_web": lambda: _make_anthropic_web(llm, cfg),
         "apec": lambda: _make_apec(cfg),
         "linkedin": lambda: _make_linkedin(cfg),
@@ -87,11 +86,6 @@ def _get_search_provider(name: str, llm, cfg: dict):
 # Lazy import wrappers — pulled out into named functions so the dispatch
 # table stays readable and each connector pays its own import cost only when
 # actually instantiated.
-
-def _make_adaptive_web(llm, cfg):
-    from providers.search.connectors.adaptive_web import AdaptiveWebSearchProvider
-    return AdaptiveWebSearchProvider(llm, cfg)
-
 
 def _make_anthropic_web(llm, cfg):
     from providers.search.web_search import AnthropicWebSearchProvider
@@ -376,6 +370,65 @@ def _make_job_id(job: dict) -> str:
     return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
+# ── Directive search (anthropic_web) ─────────────────────────────────────────
+
+_DIRECTIVE_MAX_RESULTS = 30
+
+
+def _run_directive_search(
+    state: AgentState,
+    llm,
+    search_cfg: dict,
+    run_log: list,
+    errors: list,
+) -> list[dict]:
+    """One comprehensive search call for anthropic_web with full context.
+
+    Replaces the N-query parallel loop for this connector — the LLM gets all
+    positions, locations, and company hints in a single directive prompt and
+    returns up to _DIRECTIVE_MAX_RESULTS results.
+    """
+    from providers.search.web_search import AnthropicWebSearchProvider
+
+    cfg = state["config"]
+
+    # Collect unique non-empty positions from the cvs config block
+    cvs_cfg = cfg.get("search", {}).get("cvs", {})
+    seen_positions: set[str] = set()
+    positions: list[str] = []
+    for titles in cvs_cfg.values():
+        for t in (titles or []):
+            if t and t.strip() and t.strip() not in seen_positions:
+                seen_positions.add(t.strip())
+                positions.append(t.strip())
+
+    locations: list[str] = cfg.get("search", {}).get("locations", ["Paris"])
+    companies: list[str] = state.get("companies", [])
+    hints: dict = state.get("company_hints", {})
+
+    run_log.append(
+        f"[anthropic_web] directive search: {positions} × {locations}, "
+        f"{len(companies)} companies, max {_DIRECTIVE_MAX_RESULTS}"
+    )
+
+    try:
+        provider = AnthropicWebSearchProvider(llm, search_cfg)
+        results = provider.search_all(
+            positions=positions,
+            locations=locations,
+            companies=companies,
+            hints=hints,
+            max_results=_DIRECTIVE_MAX_RESULTS,
+        )
+        run_log.append(f"[anthropic_web] → {len(results)} results")
+        logger.info("[anthropic_web] directive search → %d results", len(results))
+        return results
+    except Exception as e:
+        errors.append(f"Directive search failed: {e}")
+        logger.error("Directive search failed: %s", e)
+        return []
+
+
 # ── Graph node ───────────────────────────────────────────────────────────────
 
 def run(state: AgentState) -> AgentState:
@@ -407,19 +460,28 @@ def run(state: AgentState) -> AgentState:
 
     recency_days = search_cfg.get("recency_days", 3)
 
-    # Primary pass — these are the connectors we always try.
-    raw_jobs.extend(_run_parallel(primary, queries, llm, search_cfg, run_log, errors, recency_days))
+    # anthropic_web gets one comprehensive directive call instead of N queries.
+    # All other connectors (france_travail, adzuna, …) keep the parallel loop.
+    directive_cfgs = [c for c in primary if c["name"] == "anthropic_web"]
+    loop_primary = [c for c in primary if c["name"] != "anthropic_web"]
+    directive_fallbacks = [c for c in fallbacks if c["name"] == "anthropic_web"]
+    loop_fallbacks = [c for c in fallbacks if c["name"] != "anthropic_web"]
 
-    # Fallback pass — only run when primary returned nothing. This is the
-    # safety net for "all my API keys broke" type situations.
-    if fallbacks:
-        if raw_jobs:
-            skipped = [c["name"] for c in fallbacks]
-            run_log.append(f"Fallback connectors skipped (primary found results): {skipped}")
-            logger.info("Fallback connectors skipped: %s", skipped)
-        else:
-            run_log.append("Primary connectors returned 0 results — activating fallbacks")
-            raw_jobs.extend(_run_parallel(fallbacks, queries, llm, search_cfg, run_log, errors, recency_days))
+    if directive_cfgs:
+        raw_jobs.extend(_run_directive_search(state, llm, search_cfg, run_log, errors))
+
+    raw_jobs.extend(_run_parallel(loop_primary, queries, llm, search_cfg, run_log, errors, recency_days))
+
+    # Fallback pass — only runs when primary produced nothing.
+    if not raw_jobs:
+        if directive_fallbacks:
+            raw_jobs.extend(_run_directive_search(state, llm, search_cfg, run_log, errors))
+        if loop_fallbacks:
+            raw_jobs.extend(_run_parallel(loop_fallbacks, queries, llm, search_cfg, run_log, errors, recency_days))
+    elif fallbacks:
+        skipped = [c["name"] for c in fallbacks]
+        run_log.append(f"Fallback connectors skipped (primary found results): {skipped}")
+        logger.info("Fallback connectors skipped: %s", skipped)
 
     # Drop month-old postings that slipped past API recency filters
     raw_jobs = _filter_recent(raw_jobs)
