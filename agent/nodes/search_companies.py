@@ -189,7 +189,7 @@ def run(state: AgentState) -> AgentState:
 
     try:
         from providers.llm.factory import build_llm
-        llm = build_llm(cfg["llm"])
+        llm = build_llm(cfg["llm"], task="search")
     except Exception as e:
         errors.append(f"Company search initialisation failed: {e}")
         logger.error("Company search init failed: %s", e)
