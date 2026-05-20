@@ -24,9 +24,11 @@ __pycache__/
 # OS
 .DS_Store
 
-# query/ is an internal work folder — ignore everything except the scoring prompt
+# query/ is an internal work folder — ignore runtime outputs, track prompt files
 query/
 !query/JOB_SCORING_PROMPT.md
+!query/SEARCH_DIRECTIVE_PROMPT.md
+!query/SEARCH_COMPANY_PROMPT.md
 
 # OAuth tokens (auto-generated)
 .oauth_client.json

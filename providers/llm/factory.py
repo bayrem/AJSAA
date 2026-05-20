@@ -43,7 +43,11 @@ def build_llm(cfg: dict, task: str = "default"):
 
     # Build a new dict so we don't mutate the caller's config — tests rely
     # on this invariant.
-    resolved_cfg = {**cfg, "model": resolved_model}
+    # Search tasks need --dangerously-skip-permissions so the Claude CLI can
+    # invoke its web-search tool; all other tasks (scoring, compression) run
+    # without tool access for speed and safety.
+    allow_tools_override = True if task == "search" else cfg.get("allow_tools", False)
+    resolved_cfg = {**cfg, "model": resolved_model, "allow_tools": allow_tools_override}
 
     provider = resolved_cfg.get("provider", "anthropic").lower()
 

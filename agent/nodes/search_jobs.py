@@ -372,8 +372,8 @@ def _make_job_id(job: dict) -> str:
 
 # ── Directive search (anthropic_web) ─────────────────────────────────────────
 
-_DIRECTIVE_TARGET = 30   # jobs we want after Tavily filtering
-_DIRECTIVE_LLM_MAX = 50  # URLs we ask the LLM for (buffer for Tavily drops)
+_DIRECTIVE_TARGET = 50   # jobs we want after Tavily filtering
+_DIRECTIVE_LLM_MAX = 80  # URLs we ask the LLM for (buffer for Tavily drops + aggregator filter)
 
 
 def _get_positions(state: AgentState) -> list[str]:

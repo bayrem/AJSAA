@@ -74,7 +74,8 @@ def run(state: AgentState) -> AgentState:
     cached = _cached_hash(_QUERIES_FILE)
 
     if cached == current_hash and cached:
-        queries = state.get("raw_queries", [])
+        lines = _QUERIES_FILE.read_text(encoding="utf-8").splitlines()
+        queries = [ln for ln in lines[2:] if ln.strip()]  # skip hash line + blank line
         run_log.append(
             f"generate_queries: cache hit (hash {current_hash[:8]}…) — "
             f"using {len(queries)} queries from {_QUERIES_FILE}"

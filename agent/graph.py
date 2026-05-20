@@ -184,10 +184,6 @@ def _needs_convert_cvs(state: AgentState) -> str:
     return "convert_cvs" if state["pdf_paths"] else "generate_queries"
 
 
-def _needs_generate_queries(state: AgentState) -> str:
-    """Skip query generation when ``raw_queries`` already came from disk."""
-    return "generate_queries" if not state["raw_queries"] else "search_jobs"
-
 
 def _needs_notifications(state: AgentState) -> str:
     """Skip the notifications node when no channels are configured."""
@@ -230,11 +226,7 @@ def build_graph() -> CompiledStateGraph:
     })
     graph.add_edge("convert_cvs", "generate_queries")
 
-    # Conditional: skip LLM query generation when queries already exist
-    graph.add_conditional_edges("generate_queries", _needs_generate_queries, {
-        "generate_queries": "generate_queries",
-        "search_jobs": "search_jobs",
-    })
+    graph.add_edge("generate_queries", "search_jobs")
 
     # Linear core pipeline
     graph.add_edge("search_jobs", "search_companies")

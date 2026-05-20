@@ -18,6 +18,29 @@ logger = logging.getLogger(__name__)
 _MIN_CONTENT_CHARS = 200
 _DESCRIPTION_CAP = 2000
 
+# URL patterns that identify job board search/listing pages — not individual postings.
+# These slip through the LLM response because search engines surface them as top results,
+# but they're useless for scoring. Drop them before Tavily to save extract quota.
+_AGGREGATOR_PATTERNS = [
+    re.compile(r"builtin\.com/jobs/", re.IGNORECASE),
+    re.compile(r"hnhiring\.com/", re.IGNORECASE),
+    re.compile(r"jobtoday\.com/", re.IGNORECASE),
+    re.compile(r"remoteok\.com(?:/[^/]+)?$", re.IGNORECASE),
+    re.compile(r"weworkremotely\.com/categories/", re.IGNORECASE),
+    re.compile(r"remotive\.io/remote-jobs/", re.IGNORECASE),
+    re.compile(r"arc\.dev/remote-jobs/[^?#]+$", re.IGNORECASE),
+    re.compile(r"startup\.jobs/locations/", re.IGNORECASE),
+    re.compile(r"linkedin\.com/jobs/search", re.IGNORECASE),
+    re.compile(r"glassdoor\.[^/]+/Job/jobs\.htm", re.IGNORECASE),
+    re.compile(r"indeed\.com/jobs\b", re.IGNORECASE),
+]
+
+
+def _is_aggregator_page(url: str) -> bool:
+    """Return True if the URL looks like a job board listing/search page."""
+    return any(pat.search(url) for pat in _AGGREGATOR_PATTERNS)
+
+
 _LOCATION_RE = re.compile(
     r"\b(Paris|Remote|Île-de-France|France|Lyon|Bordeaux|Nantes|Hybrid|On-?site)\b",
     re.IGNORECASE,
@@ -121,8 +144,14 @@ def validate_and_enrich(
     if not candidates:
         return []
 
-    urls = [c["url"] for c in candidates if c.get("url")]
-    candidate_by_url = {c["url"]: c for c in candidates if c.get("url")}
+    # Drop known aggregator/listing-page patterns before hitting Tavily.
+    real_candidates = [c for c in candidates if c.get("url") and not _is_aggregator_page(c["url"])]
+    dropped_agg = len(candidates) - len(real_candidates)
+    if dropped_agg:
+        logger.info("url_validator: dropped %d aggregator/listing-page URLs pre-Tavily", dropped_agg)
+
+    urls = [c["url"] for c in real_candidates]
+    candidate_by_url = {c["url"]: c for c in real_candidates}
 
     from providers.search.connectors.tavily import TavilyConnector
     content_by_url = TavilyConnector(cfg).extract(urls)

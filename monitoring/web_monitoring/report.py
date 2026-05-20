@@ -37,16 +37,25 @@ def _token_block_html(token_usage: dict) -> str:
     g_total = g_in + g_out + g_cache_read + g_cache_create
 
     cache_detail = ""
+    effective_str = ""
     if g_cache_read or g_cache_create:
         cache_detail = (
             f" · cache: {g_cache_read:,} read / {g_cache_create:,} created"
+        )
+        # Effective compute = tokens that actually count against your limit:
+        # new input + output + 10% of cache-reads (cache-reads are ~90% cheaper).
+        effective = g_in + g_out + round(g_cache_read * 0.1)
+        effective_str = (
+            f' · <span style="color:#28a745;font-weight:bold">'
+            f"≈{fmt_tokens(effective)} effective compute</span>"
         )
 
     grand_line = (
         f'<p style="font-size:14px;margin:8px 0 16px;">'
         f"<strong>Grand total:</strong> {fmt_cost(g_cost)} · "
-        f"{fmt_tokens(g_total)} total ({g_in:,} new in / {g_out:,} out"
-        f"{cache_detail}) · {g_calls} calls"
+        f"{fmt_tokens(g_total)} raw ({g_in:,} new in / {g_out:,} out"
+        f"{cache_detail})"
+        f"{effective_str} · {g_calls} calls"
         "</p>"
     )
 
@@ -146,10 +155,19 @@ def _node_row_html(name: str, node_timings: dict, by_node: dict) -> str:
     node_data = by_node.get(name) or {}
     in_tok = safe_int(node_data.get("input_tokens"))
     out_tok = safe_int(node_data.get("output_tokens"))
-    total_tokens = in_tok + out_tok
+    cache_read = safe_int(node_data.get("cache_read_input_tokens"))
+    cache_create = safe_int(node_data.get("cache_creation_input_tokens"))
     cost = safe_float(node_data.get("cost_usd"))
-    tok_str = fmt_tokens(total_tokens) if total_tokens else "—"
     cost_str = fmt_cost(cost) if cost else "—"
+    if in_tok or out_tok or cache_read or cache_create:
+        tok_parts = [f"{fmt_tokens(in_tok)} in", f"{fmt_tokens(out_tok)} out"]
+        if cache_read:
+            tok_parts.append(
+                f'<span style="color:#28a745">{fmt_tokens(cache_read)} cached</span>'
+            )
+        tok_str = " / ".join(tok_parts)
+    else:
+        tok_str = "—"
     return (
         f"<tr><td>{name}</td><td>{status}</td><td>{time_str}</td>"
         f"<td>{tok_str}</td><td>{cost_str}</td></tr>"
@@ -212,9 +230,17 @@ _LIVE_POLL_JS = """<script>
                 : st === 'running' ? '⟳' : '○';
       var timeStr = (typeof t === 'number') ? t.toFixed(1) + 's' : '—';
       var nd = bn[name] || {};
-      var toks = (nd.input_tokens||0) + (nd.output_tokens||0) + (nd.cache_read_input_tokens||0) + (nd.cache_creation_input_tokens||0);
+      var inTok = nd.input_tokens||0;
+      var outTok = nd.output_tokens||0;
+      var cacheRead = nd.cache_read_input_tokens||0;
+      var hasTokens = inTok||outTok||cacheRead||(nd.cache_creation_input_tokens||0);
+      var tokStr;
+      if(hasTokens){
+        tokStr = fmtTokens(inTok)+' in / '+fmtTokens(outTok)+' out';
+        if(cacheRead) tokStr += ' / <span style="color:#28a745">'+fmtTokens(cacheRead)+' cached</span>';
+      } else { tokStr = '—'; }
       rows += '<tr><td>' + escapeHtml(name) + '</td><td>' + glyph
-           +  '</td><td>' + timeStr + '</td><td>' + fmtTokens(toks)
+           +  '</td><td>' + timeStr + '</td><td>' + tokStr
            +  '</td><td>' + fmtCost(nd.cost_usd||0) + '</td></tr>';
     }
     return rows;
@@ -358,7 +384,7 @@ a{color:#0d6efd;text-decoration:none;}
 <thead><tr>
   <th>Run ID</th><th>Datetime</th><th>Status</th><th>Runtime</th>
   <th>Jobs found</th><th>Jobs scored</th><th>Jobs approved</th>
-  <th>Tokens consumed</th><th>Cost $</th><th></th>
+  <th>Tokens consumed</th><th>Cost $</th>
 </tr></thead>
 <tbody>
 __ROWS_HTML__
@@ -453,7 +479,7 @@ def update_index(run_id: str, timestamp: str, duration_s: float, stats: dict) ->
 
         rows.append(
             f"<tr>"
-            f"<td>{_html.escape(str(rid))}</td>"
+            f'<td><a href="{href}">{_html.escape(str(rid))}</a></td>'
             f"<td>{_html.escape(str(run.get('timestamp', '')))}</td>"
             f'<td class="{status_cls}">{status_label}</td>'
             f"<td>{fmt_duration(safe_float(run.get('duration_s', 0)))}</td>"
@@ -462,7 +488,6 @@ def update_index(run_id: str, timestamp: str, duration_s: float, stats: dict) ->
             f"<td>{safe_int(run.get('new_saved', 0))}</td>"
             f"<td>{tok_str}</td>"
             f"<td>{cost_str}</td>"
-            f'<td><a href="{href}">→</a></td>'
             f"</tr>"
         )
 

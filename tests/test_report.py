@@ -117,6 +117,59 @@ class TestTokenBlockHtml:
         assert "analyze_jobs" in html
         assert "generate_queries" in html
 
+    def test_effective_compute_shown_when_cache_present(self):
+        usage = {
+            "grand_total": {
+                "input_tokens": 36,
+                "output_tokens": 1199,
+                "cache_read_input_tokens": 138922,
+                "cache_creation_input_tokens": 36285,
+                "cost_usd": 0.07,
+                "calls": 3,
+            },
+            "by_model": {},
+            "by_node": {},
+        }
+        html = report._token_block_html(usage)
+        # effective = 36 + 1199 + round(138922 * 0.1) = 36 + 1199 + 13892 = 15127 → "15k"
+        assert "effective compute" in html
+        assert "15k" in html
+
+    def test_no_effective_compute_without_cache(self):
+        html = report._token_block_html(_state_with_tokens()["token_usage"])
+        # fixture has zero cache tokens → no effective compute line
+        assert "effective compute" not in html
+
+    def test_node_row_shows_in_out_cached_detail(self):
+        # Pipeline table must show per-bucket breakdown, not a single total.
+        node_data = {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_read_input_tokens": 5000,
+            "cache_creation_input_tokens": 2000,
+            "cost_usd": 0.04,
+            "calls": 1,
+        }
+        html = report._node_row_html("search_jobs", {"search_jobs": 3.2}, {"search_jobs": node_data})
+        assert "100 in" in html
+        assert "50 out" in html
+        # cache-read shown in green
+        assert "5.0k cached" in html
+
+    def test_node_row_no_cached_label_when_zero(self):
+        node_data = {
+            "input_tokens": 200,
+            "output_tokens": 80,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cost_usd": 0.01,
+            "calls": 1,
+        }
+        html = report._node_row_html("analyze_jobs", {"analyze_jobs": 1.5}, {"analyze_jobs": node_data})
+        assert "200 in" in html
+        assert "80 out" in html
+        assert "cached" not in html
+
     def test_empty_token_usage_renders_placeholder(self):
         # Issue #61 acceptance: empty data must render gracefully, not crash.
         html = report._token_block_html({})
@@ -224,8 +277,8 @@ class TestUpdateIndex:
 
         content = (in_tmp_cwd / "logs" / "index.html").read_text(encoding="utf-8")
         assert "<th>Cost $</th>" in content
-        # Both token and cost cells are em-dash followed by the link cell.
-        assert "<td>—</td><td>—</td><td><a" in content
+        # Both token and cost cells render as em-dash; row ends there (no extra link cell).
+        assert "<td>—</td><td>—</td></tr>" in content
 
     def test_run_with_errors_shows_failed_status(self, in_tmp_cwd):
         stats = {"queries": 2, "found": 5, "passed": 0, "new_saved": 0, "errors": 1,
