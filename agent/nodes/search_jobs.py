@@ -41,6 +41,7 @@ _DEFAULT_MAX_CONCURRENT = {
     "france_travail": 3,    # Documented 3 req/s ceiling
     "adzuna": 5,            # No documented limit; conservative default
     "anthropic_web": 1,     # LLM-backed — parallelism yields nothing
+    "linkedin": 1,          # Session-based auth — single in-flight reduces ban risk
 }
 _FALLBACK_MAX_CONCURRENT = 3
 

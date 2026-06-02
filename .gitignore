@@ -39,3 +39,6 @@ scoring_profiles/
 
 # IT Team automation session data
 .it-sessions/
+
+# MCP servers — locally installed third-party servers; not committed
+mcp_servers/

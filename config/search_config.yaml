@@ -10,7 +10,7 @@ search:
 cvs:
   cv1:
     - "Product Manager Data AI"
-    - "Head of Product Data AI"
+    - ""
   cv2:
     - ""
     - ""
@@ -22,11 +22,8 @@ cvs:
 #   url entry     → skips LLM, fetches jobs from that URL directly
 # User-provided hint/url always overrides anything in hints_cache.json.
 companies:
-  - "Mistral AI"
   - name: "Hugging Face"
     hint: "greenhouse:huggingface"
-  - name: "Criteo"
-    url: "https://jobs.lever.co/criteo"
 
 # ── Target locations ──────────────────────────────────────────────────────────
 locations:
