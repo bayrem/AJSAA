@@ -35,9 +35,10 @@ search:
       enabled: false               # No auth required once working endpoint confirmed
       max_results_per_query: 10
 
-    - name: linkedin               # LinkedIn Jobs — stub; requires OAuth app approval
-      enabled: false               # Requires: LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET
+    - name: linkedin               # LinkedIn Jobs — unofficial API + MCP browser fallback
+      enabled: true                # Requires: LINKEDIN_EMAIL, LINKEDIN_PASSWORD (Infisical)
       max_results_per_query: 10
+      max_concurrent: 1            # Single in-flight — session auth, ban risk reduction
 
     - name: apec                   # APEC (French exec board) — stub; requires auth
       enabled: false               # Requires: session cookie or undocumented API reverse-engineering
