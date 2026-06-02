@@ -62,8 +62,8 @@ def compress_cv(llm, cv: dict) -> dict:
 
 def run_llm(llm, jobs, compressed_cvs, scoring_cfg) -> dict:
     from agent.nodes.analyze_jobs import score_jobs_batch
-    results = score_jobs_batch(llm, jobs, compressed_cvs, scoring_cfg)
-    return {j["job_id"]: j["score"] for j in results}
+    passed, _ = score_jobs_batch(llm, jobs, compressed_cvs, scoring_cfg)
+    return {j["job_id"]: j["score"] for j in passed}
 
 
 def run_static(jobs, profiles_dir, scoring_cfg) -> dict:
