@@ -148,7 +148,10 @@ def _job_card_html(job: dict) -> str:
     )
 
 
-def _node_row_html(name: str, node_timings: dict, by_node: dict) -> str:
+_JOB_NODES = {"search_jobs", "search_companies", "analyze_jobs", "store_results"}
+
+
+def _node_row_html(name: str, node_timings: dict, by_node: dict, jobs_treated: dict | None = None) -> str:
     elapsed = node_timings.get(name)
     time_str = f"{elapsed:.1f}s" if elapsed is not None else "—"
     status = "✓" if elapsed is not None else "○"
@@ -168,9 +171,14 @@ def _node_row_html(name: str, node_timings: dict, by_node: dict) -> str:
         tok_str = " / ".join(tok_parts)
     else:
         tok_str = "—"
+    jobs_str = "—"
+    if name in _JOB_NODES and jobs_treated is not None:
+        cnt = jobs_treated.get(name)
+        if cnt is not None:
+            jobs_str = str(cnt)
     return (
         f"<tr><td>{name}</td><td>{status}</td><td>{time_str}</td>"
-        f"<td>{tok_str}</td><td>{cost_str}</td></tr>"
+        f"<td>{jobs_str}</td><td>{tok_str}</td><td>{cost_str}</td></tr>"
     )
 
 
@@ -190,10 +198,15 @@ _LIVE_PAGE_CSS = (
     ".badge-complete{background:#28a745;}"
     ".badge-failed{background:#dc3545;}"
     "@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}"
+    "@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}"
+    ".spin{display:inline-block;animation:spin 1s linear infinite;}"
+    ".score-low{color:#dc3545;font-weight:bold;}"
 )
 
 _LIVE_POLL_JS = """<script>
 (function(){
+  var _lastState = null;
+
   function badgeHtml(status){
     var cls = 'badge-' + (status || 'running');
     var label = (status || 'running').toUpperCase();
@@ -215,20 +228,50 @@ _LIVE_POLL_JS = """<script>
     if(c < 0.01) return '$'+c.toFixed(4);
     return '$'+c.toFixed(2);
   }
+  function fmtElapsed(secs){
+    if(secs == null || secs < 0) return '—';
+    if(secs < 60) return secs.toFixed(1)+'s';
+    var m = Math.floor(secs/60), s = Math.round(secs%60);
+    return m+'m '+s+'s';
+  }
+
+  // Nodes that show a jobs-treated count
+  var JOB_NODES = {
+    'search_jobs': true, 'search_companies': true,
+    'analyze_jobs': true, 'store_results': true
+  };
+
   function renderNodeRows(state){
     var order = ['load_context','convert_cvs','generate_queries','search_jobs',
                  'search_companies','analyze_jobs','store_results','send_notifications'];
     var ns = state.node_status || {};
     var nt = state.node_timings || {};
+    var nst = state.node_start_times || {};
     var bn = (state.token_usage || {}).by_node || {};
+    var jt = ((state.kpis || {}).jobs_treated) || {};
+    var now = Date.now() / 1000;
     var rows = '';
     for (var i=0; i<order.length; i++){
       var name = order[i];
       var st = ns[name] || 'waiting';
-      var t = nt[name];
-      var glyph = st === 'complete' ? '✓' : st === 'error' ? '✗'
-                : st === 'running' ? '⟳' : '○';
-      var timeStr = (typeof t === 'number') ? t.toFixed(1) + 's' : '—';
+      var finishedT = nt[name];
+      var startT = nst[name];
+      var glyph;
+      if(st === 'complete')      glyph = '✓';
+      else if(st === 'error')    glyph = '✗';
+      else if(st === 'running')  glyph = '<span class="spin">⟳</span>';
+      else                       glyph = '○';
+
+      // Time: completed nodes show final time; running nodes count live
+      var timeStr;
+      if(typeof finishedT === 'number'){
+        timeStr = fmtElapsed(finishedT);
+      } else if(st === 'running' && typeof startT === 'number'){
+        timeStr = '<span class="node-timer" data-start="'+startT+'">'+fmtElapsed(now - startT)+'</span>';
+      } else {
+        timeStr = '—';
+      }
+
       var nd = bn[name] || {};
       var inTok = nd.input_tokens||0;
       var outTok = nd.output_tokens||0;
@@ -239,26 +282,74 @@ _LIVE_POLL_JS = """<script>
         tokStr = fmtTokens(inTok)+' in / '+fmtTokens(outTok)+' out';
         if(cacheRead) tokStr += ' / <span style="color:#28a745">'+fmtTokens(cacheRead)+' cached</span>';
       } else { tokStr = '—'; }
-      rows += '<tr><td>' + escapeHtml(name) + '</td><td>' + glyph
-           +  '</td><td>' + timeStr + '</td><td>' + tokStr
-           +  '</td><td>' + fmtCost(nd.cost_usd||0) + '</td></tr>';
+
+      var jobsStr = '—';
+      if(JOB_NODES[name] && st !== 'waiting'){
+        var cnt = jt[name];
+        jobsStr = (typeof cnt === 'number') ? String(cnt) : '0';
+      }
+
+      rows += '<tr>'
+           +  '<td>'+escapeHtml(name)+'</td>'
+           +  '<td>'+glyph+'</td>'
+           +  '<td>'+timeStr+'</td>'
+           +  '<td>'+jobsStr+'</td>'
+           +  '<td>'+tokStr+'</td>'
+           +  '<td>'+fmtCost(nd.cost_usd||0)+'</td>'
+           +  '</tr>';
     }
     return rows;
   }
+
+  // Tick every second to update live node timers without a full re-render
+  function updateNodeTimers(){
+    var now = Date.now() / 1000;
+    var spans = document.querySelectorAll('.node-timer[data-start]');
+    for(var i=0; i<spans.length; i++){
+      var start = parseFloat(spans[i].getAttribute('data-start'));
+      spans[i].textContent = fmtElapsed(now - start);
+    }
+  }
+
+  // Update the live run duration in the meta line
+  function updateDuration(){
+    var el = document.getElementById('live-duration');
+    if(!el || !_lastState) return;
+    var start = _lastState.run_start_time;
+    if(typeof start !== 'number') return;
+    el.textContent = fmtElapsed(Date.now()/1000 - start);
+  }
+
+  // Full re-render from latest state (on each poll)
+  function render(state){
+    _lastState = state;
+    var badge = document.getElementById('status-badge');
+    if(badge) badge.outerHTML = '<span id="status-badge">'+badgeHtml(state.status)+'</span>';
+    var tbody = document.getElementById('pipeline-rows');
+    if(tbody) tbody.innerHTML = renderNodeRows(state);
+    updateDuration();
+  }
+
   function tick(){
     fetch('/state.json', {cache: 'no-store'})
       .then(function(r){ return r.json(); })
       .then(function(state){
-        var badge = document.getElementById('status-badge');
-        if (badge) badge.outerHTML = '<span id="status-badge">' + badgeHtml(state.status) + '</span>';
-        var tbody = document.getElementById('pipeline-rows');
-        if (tbody) tbody.innerHTML = renderNodeRows(state);
-        if ((state.status || 'running') !== 'running') return;
+        render(state);
+        if((state.status || 'running') !== 'running') return;
         setTimeout(tick, 1000);
       })
       .catch(function(){ setTimeout(tick, 2000); });
   }
+
+  // Sub-second timer loop — keeps node timers and duration smooth
+  function timerLoop(){
+    updateNodeTimers();
+    updateDuration();
+    requestAnimationFrame(timerLoop);
+  }
+
   tick();
+  requestAnimationFrame(timerLoop);
 })();
 </script>"""
 
@@ -281,12 +372,16 @@ def render_dashboard_html(
     ts = state.get("timestamp", "")
 
     scored = state.get("scored_jobs", [])
+    discarded = state.get("discarded_jobs", [])
     sorted_jobs = sorted(scored, key=lambda j: j.get("score", 0), reverse=True)
+    sorted_discarded = sorted(discarded, key=lambda j: j.get("score", 0), reverse=True)
     errors = state.get("errors", [])
 
     job_cards = "\n".join(_job_card_html(j) for j in sorted_jobs)
+    discarded_cards = "\n".join(_job_card_html(j) for j in sorted_discarded)
     by_node = (state.get("token_usage") or {}).get("by_node") or {}
-    node_rows = "\n".join(_node_row_html(n, node_timings, by_node) for n in NODE_ORDER)
+    jobs_treated = (state.get("kpis") or {}).get("jobs_treated") or {}
+    node_rows = "\n".join(_node_row_html(n, node_timings, by_node, jobs_treated) for n in NODE_ORDER)
     errors_display = "none" if not errors else "block"
     errors_list = "\n".join(f"<li>{_html.escape(str(e))}</li>" for e in errors)
     no_jobs_msg = "" if sorted_jobs else '<p style="color:#6c757d">No jobs stored this run.</p>'
@@ -304,12 +399,13 @@ def render_dashboard_html(
         "</head>",
         "<body>",
         f'<h1>AJSAA — Run {_html.escape(str(run_id))} <span id="status-badge">{badge}</span></h1>',
-        f'<div class="meta">{_html.escape(str(ts))} · Duration: {fmt_duration(duration_s)} '
-        f'· Jobs stored: {state.get("stored_count", 0)}</div>',
+        f'<div class="meta">{_html.escape(str(ts))} · Duration: '
+        f'<span id="live-duration">{fmt_duration(duration_s)}</span>'
+        f' · Jobs stored: {state.get("stored_count", 0)}</div>',
         '<div id="dashboard">',
         "<h2>Pipeline</h2>",
         "<table>",
-        "<thead><tr><th>Node</th><th>Status</th><th>Time</th><th>Tokens</th><th>Cost</th></tr></thead>",
+        "<thead><tr><th>Node</th><th>Status</th><th>Time</th><th>Jobs</th><th>Tokens</th><th>Cost</th></tr></thead>",
         '<tbody id="pipeline-rows">',
         node_rows,
         "</tbody></table>",
@@ -320,6 +416,10 @@ def render_dashboard_html(
         f"<h2>Jobs stored this run ({len(sorted_jobs)})</h2>",
         job_cards,
         no_jobs_msg,
+        f"<h2>Discarded jobs ({len(sorted_discarded)}) "
+        f'<span style="color:#6c757d;font-size:13px;font-weight:normal;">'
+        f"— scored below threshold, kept for review</span></h2>",
+        discarded_cards if sorted_discarded else '<p style="color:#6c757d">No discarded jobs this run.</p>',
         "</div>",
         poll_js,
         "</body>",

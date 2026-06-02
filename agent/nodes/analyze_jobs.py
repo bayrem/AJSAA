@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 _JOBS_FILE = Path("query/jobs_found.jsonl")
 _SCORED_FILE = Path("query/jobs_scored.jsonl")
+_DISCARDED_FILE = Path("query/jobs_discarded.jsonl")
 
 
 def _read_jobs_jsonl() -> list[dict]:
@@ -28,9 +29,9 @@ def _read_jobs_jsonl() -> list[dict]:
         return [json.loads(line) for line in f if line.strip()]
 
 
-def _write_scored_jsonl(jobs: list[dict]) -> None:
+def _write_jsonl(path: Path, jobs: list[dict]) -> None:
     lines = [json.dumps(j, ensure_ascii=False) for j in jobs]
-    _SCORED_FILE.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
 def run(state: AgentState) -> AgentState:
@@ -53,11 +54,11 @@ def run(state: AgentState) -> AgentState:
 
     if not raw_jobs:
         run_log.append("No jobs to analyze")
-        return {**state, "scored_jobs": [], "errors": errors, "run_log": run_log}
+        return {**state, "scored_jobs": [], "discarded_jobs": [], "errors": errors, "run_log": run_log}
 
     if not cvs:
         errors.append("No CVs loaded — cannot score jobs")
-        return {**state, "scored_jobs": [], "errors": errors, "run_log": run_log}
+        return {**state, "scored_jobs": [], "discarded_jobs": [], "errors": errors, "run_log": run_log}
 
     from providers.llm.factory import build_llm
     search_llm = build_llm(cfg["llm"], task="search")
@@ -73,19 +74,29 @@ def run(state: AgentState) -> AgentState:
             errors.append(f"CV compression failed for '{cv['name']}': {e}")
             compressed_cvs.append(cv)
 
-    scored_jobs = score_jobs_batch(scoring_llm, raw_jobs, compressed_cvs, scoring_cfg)
+    scored_jobs, discarded_jobs = score_jobs_batch(scoring_llm, raw_jobs, compressed_cvs, scoring_cfg)
     scored_jobs.sort(key=lambda j: j["score"], reverse=True)
+    discarded_jobs.sort(key=lambda j: j["score"], reverse=True)
 
-    _write_scored_jsonl(scored_jobs)
-    run_log.append(f"analyze_jobs: wrote {len(scored_jobs)} scored jobs to {_SCORED_FILE}")
+    _write_jsonl(_SCORED_FILE, scored_jobs)
+    _write_jsonl(_DISCARDED_FILE, discarded_jobs)
+    run_log.append(
+        f"analyze_jobs: wrote {len(scored_jobs)} scored + {len(discarded_jobs)} discarded"
+    )
 
     run_log.append(
         f"Analysis complete: {len(scored_jobs)}/{len(raw_jobs)} "
-        f"jobs passed threshold (≥{min_score})"
+        f"jobs passed threshold (≥{min_score}), {len(discarded_jobs)} discarded"
     )
     logger.info(
-        "Analysis complete: %d/%d jobs above threshold",
-        len(scored_jobs), len(raw_jobs),
+        "Analysis complete: %d/%d jobs above threshold, %d discarded",
+        len(scored_jobs), len(raw_jobs), len(discarded_jobs),
     )
 
-    return {**state, "scored_jobs": scored_jobs, "errors": errors, "run_log": run_log}
+    return {
+        **state,
+        "scored_jobs": scored_jobs,
+        "discarded_jobs": discarded_jobs,
+        "errors": errors,
+        "run_log": run_log,
+    }

@@ -85,6 +85,7 @@ def _build_initial_state(cfg: dict, run_id: str, ts: str) -> dict:
     return {
         "run_id": run_id,
         "timestamp": ts,
+        "run_start_time": time.time(),  # Unix timestamp — used by live dashboard duration counter
         "config": cfg,
         "cvs": [],
         "raw_queries": [],
@@ -94,6 +95,7 @@ def _build_initial_state(cfg: dict, run_id: str, ts: str) -> dict:
         "queries": [],
         "raw_jobs": [],
         "scored_jobs": [],
+        "discarded_jobs": [],
         "stored_count": 0,
         "sheet_url": None,
         "notification_sent": False,

@@ -141,7 +141,7 @@ def _parse_with_retry(
         "Return ONLY a valid JSON array in this exact format:\n"
         '[{"job_index": int, "best_cv": str, "score": int, '
         '"recommendation": "APPLY|CONSIDER|SKIP", "reasoning": str}]\n'
-        f"Include only jobs with score >= {min_score}. JSON only. No explanation."
+        "Include ALL jobs. JSON only. No explanation."
     )
 
     for attempt in range(2):
@@ -199,17 +199,18 @@ CVs:
 </job_data>
 
 Rules:
-- Score 0-{max_score}. Only include jobs with score >= {min_score}.
+- Score 0-{max_score}. Include ALL jobs — even low scorers. Low-scored jobs are
+  stored separately so the user can review what was rejected and why.
 - Base score strictly on CV facts — no assumptions.
 - Return JSON array only, no preamble.
 
 Output format:
 [
   {{"job_index": 0, "best_cv": "cv_name", "score": 82, "recommendation": "APPLY", "reasoning": "one sentence"}},
-  {{"job_index": 2, "best_cv": "cv_name", "score": 75, "recommendation": "CONSIDER", "reasoning": "one sentence"}}
+  {{"job_index": 2, "best_cv": "cv_name", "score": 45, "recommendation": "SKIP", "reasoning": "one sentence explaining why discarded"}}
 ]
 
-Omit jobs scoring below {min_score}."""
+Every job index 0-{len(batch) - 1} must appear in the array."""
 
 
 def _materialise_results(
@@ -217,29 +218,31 @@ def _materialise_results(
     scored: list[ScoredJob],
     min_score: int,
     max_score: int,
-) -> list[dict]:
-    """Build the output job dicts for jobs that passed the score threshold.
+) -> tuple[list[dict], list[dict]]:
+    """Split scored jobs into (passed, discarded) lists.
 
-    Each output dict is the original input job augmented with ``score``,
-    ``best_cv``, ``summary`` and ``recommendation``. Indices outside the
-    current batch are silently dropped — pydantic already constrained the
-    type but the LLM can still hallucinate a non-existent index.
+    Both lists use the original job dict augmented with ``score``, ``best_cv``,
+    ``summary``, and ``recommendation``. Discarded jobs keep their real score
+    and reasoning so the user can review what was rejected and why.
+    Indices outside the batch are silently dropped.
     """
-    out: list[dict] = []
+    passed: list[dict] = []
+    discarded: list[dict] = []
     for item in scored:
         if not (0 <= item.job_index < len(batch)):
             continue
         score = min(item.score, max_score)
-        if score < min_score:
-            continue
         # Shallow-copy so we don't mutate the caller's input dict.
         result = dict(batch[item.job_index])
         result["score"] = score
         result["best_cv"] = item.best_cv
         result["summary"] = item.reasoning
         result["recommendation"] = item.recommendation
-        out.append(result)
-    return out
+        if score >= min_score:
+            passed.append(result)
+        else:
+            discarded.append(result)
+    return passed, discarded
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -250,8 +253,12 @@ def score_jobs_batch(
     compressed_cvs: list[dict],
     scoring_cfg: dict,
     batch_size: int = 10,  # kept for backwards-compat; ignored — single call now
-) -> list[dict]:
-    """Score all ``jobs`` in a single LLM call, returning those that pass ``min_score``.
+) -> tuple[list[dict], list[dict]]:
+    """Score all ``jobs`` in a single LLM call.
+
+    Returns a ``(passed, discarded)`` tuple. ``passed`` contains jobs at or
+    above ``min_score``; ``discarded`` contains the rest with their real scores
+    and reasoning so callers can store them for review.
 
     The ``batch_size`` parameter is accepted but ignored — all jobs are sent
     in one prompt. This eliminates the N×context overhead that occurred when
@@ -267,10 +274,10 @@ def score_jobs_batch(
         batch_size: Ignored. Retained so existing callers need no changes.
 
     Returns:
-        List of scored job dicts (only those at or above ``min_score``).
+        Tuple of (passed, discarded) job dicts.
     """
     if not jobs:
-        return []
+        return [], []
 
     min_score = scoring_cfg.get("min_score", 70)
     max_score = scoring_cfg.get("max_score", 95)
@@ -291,12 +298,15 @@ def score_jobs_batch(
         scored = _parse_with_retry(llm, response.content, min_score=min_score)
     except Exception as e:
         logger.error("Scoring call failed: %s", e)
-        return []
+        return [], []
 
     if scored is None:
         logger.error("Could not parse scoring output after retry")
-        return []
+        return [], []
 
-    results = _materialise_results(jobs, scored, min_score, max_score)
-    logger.info("%d/%d jobs passed threshold (≥%d)", len(results), len(jobs), min_score)
-    return results
+    passed, discarded = _materialise_results(jobs, scored, min_score, max_score)
+    logger.info(
+        "%d/%d jobs passed threshold (≥%d), %d discarded",
+        len(passed), len(jobs), min_score, len(discarded),
+    )
+    return passed, discarded
