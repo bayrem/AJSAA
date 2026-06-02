@@ -8,7 +8,7 @@ A LangGraph-based agent that autonomously discovers, scores, and tracks job oppo
 
 1. **Loads context** — reads your CV files (`query/resume/`), generates search queries deterministically from `config/search_config.yaml` (positions × locations cross-product), and loads target companies with their ATS hints
 2. **Searches for jobs** — one directive LLM prompt returns job URLs only (no fabricated descriptions); Tavily extract validates each URL and pulls real posting content (hallucinated or unreachable URLs are dropped); company ATS boards (Greenhouse, Lever, Ashby) are queried via direct API — zero LLM tokens for ATS; all results deduplicated and checkpointed to `query/jobs_found.jsonl`
-3. **Scores matches** — single LLM call scores all jobs against your CV; keeps only jobs above a configurable threshold
+3. **Scores matches** — single LLM call scores all jobs against your CV; jobs above the threshold are stored for action; jobs below the threshold are kept with their real score and one-line reason in a separate discarded log for review
 4. **Stores results** — deduplicates by content-hash and writes to local JSON and/or cloud storage (Google Drive, OneDrive, Dropbox)
 5. **Notifies you** — sends a digest to Telegram, Slack, email, or WhatsApp
 
@@ -66,6 +66,10 @@ python3 -m venv .venv
 #   TAVILY_API_KEY                        — for URL validation and extraction (required)
 #   FRANCE_TRAVAIL_CLIENT_ID/SECRET       — optional free job board API
 #   ADZUNA_APP_ID/KEY                     — optional free job board API
+#   LINKEDIN_EMAIL, LINKEDIN_PASSWORD     — for LinkedIn connector (unofficial API)
+
+# 2b. LinkedIn MCP fallback setup (one-time, optional)
+# cd mcp_servers/linkedin-mcp-server && uv run -m linkedin_mcp_server --login
 
 # 3. Add your CV
 # Drop a PDF or .md file into query/resume/
@@ -100,9 +104,12 @@ search:
     - name: anthropic_web        # primary: LLM directive search → Tavily extract
       max_results_per_query: 4
     - name: france_travail       # optional free API — francetravail.io
-      enabled: false
+      enabled: true
     - name: adzuna               # optional free API — developer.adzuna.com
-      enabled: false
+      enabled: true
+    - name: linkedin             # unofficial API + MCP browser fallback
+      enabled: true              # requires LINKEDIN_EMAIL / LINKEDIN_PASSWORD
+      max_concurrent: 1
 
 storage:
   provider: local                # local | google_drive | onedrive | dropbox
@@ -164,7 +171,15 @@ When the pipeline is launched via Claude Code in VS Code (which blocks the TUI) 
 🌐 Live monitor: http://127.0.0.1:8765/  (run_id=abc12345)
 ```
 
-The page polls `/state.json` every second, refreshes the pipeline table, token-spend block, and job cards in place, and stops polling automatically when the run finishes. The same HTML template is reused for the static post-run report at `logs/runs/run_*.html` (just without the JS poll block).
+The page polls `/state.json` every second and provides live feedback:
+
+- **Duration counter** — increments every frame via `requestAnimationFrame`
+- **Spinning arrow** — the active node's `⟳` rotates with a CSS animation
+- **Per-node timer** — counts up while the node runs, locks to the final time on completion
+- **Jobs column** — shows how many jobs each key node has treated so far
+- **Discarded jobs section** — below stored jobs, shows all sub-threshold results with their real LLM score and one-line rejection reason
+
+The same HTML template is reused for the static post-run report at `logs/runs/run_*.html` (just without the JS poll block).
 
 CLI flags (issue #62):
 
@@ -190,7 +205,7 @@ Per-model and per-node totals are stored on the final state as `token_usage` (sh
 | Orchestration | LangGraph |
 | LLM interface | LangChain (Anthropic Claude / OpenAI) |
 | Search | Claude web search (directive prompt) + Tavily extract (validation + content) |
-| Job boards | France Travail, Adzuna (optional) |
+| Job boards | France Travail, Adzuna, LinkedIn (unofficial API + MCP browser fallback) |
 | ATS boards | Greenhouse, Lever, Ashby (unauthenticated HTTP) |
 | Terminal UI | Rich |
 | Storage | Local JSON (Google Drive / OneDrive / Dropbox) |
