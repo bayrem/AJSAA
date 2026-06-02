@@ -78,7 +78,7 @@ class LinkedInConnector(BaseSearchProvider):
             self._client = Linkedin(self.email, self.password)
 
         recency_days = self.cfg.get("recency_days", 3)
-        raw = self._client.search_jobs(
+        raw = self._client.search_jobs(  # type: ignore[attr-defined]
             keywords=query,
             location_name="Paris, France",
             listed_at=recency_days * 86_400,  # API expects seconds
