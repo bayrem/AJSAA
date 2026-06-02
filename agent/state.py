@@ -36,7 +36,8 @@ class AgentState(TypedDict):
     raw_jobs: list[dict]     # All jobs found before scoring
 
     # ── Analysis (populated by analyze_jobs) ────────────────────────────────
-    scored_jobs: list[dict]  # Jobs that passed the scoring threshold
+    scored_jobs: list[dict]     # Jobs that passed the scoring threshold
+    discarded_jobs: list[dict]  # Jobs scored below threshold — real score + reason kept
 
     # ── Output (populated by store_results and send_notifications) ──────────
     stored_count: int

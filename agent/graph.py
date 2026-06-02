@@ -24,6 +24,7 @@ Graph topology::
                                                              END
 """
 import logging
+import time
 from typing import Any, Callable
 
 from langgraph.graph import END, StateGraph
@@ -86,28 +87,47 @@ def _build_live_snapshot(
     Reads the live token-usage snapshot lazily so the live page sees the same
     cost numbers the TUI footer is showing.
     """
+    # Compute per-node elapsed times from wall-clock records kept by _safe().
+    # Running nodes get a live elapsed; completed nodes get their final time.
+    node_timings: dict[str, float] = {}
+    for n, end_t in _node_end_times.items():
+        start_t = _node_start_times.get(n)
+        if start_t is not None:
+            node_timings[n] = round(end_t - start_t, 2)
+
     return {
         "run_id": state.get("run_id", "unknown"),
         "timestamp": state.get("timestamp", ""),
+        "run_start_time": state.get("run_start_time"),  # Unix ts for JS duration counter
         "status": status,
         "current_node": current_node,
         "node_status": dict(node_status),
-        "node_timings": {},  # populated by run.py — graph has no clock
+        "node_timings": node_timings,
+        "node_start_times": dict(_node_start_times),   # JS uses these for live per-node timers
         "kpis": {
             "raw_jobs": len(state.get("raw_jobs", [])),
             "scored_jobs": len(state.get("scored_jobs", [])),
+            "discarded_jobs": len(state.get("discarded_jobs", [])),
             "stored_count": state.get("stored_count", 0),
+            # Per-node jobs-treated counts shown in the pipeline table
+            "jobs_treated": {
+                "search_jobs": len(state.get("raw_jobs", [])),
+                "search_companies": len(state.get("raw_jobs", [])),
+                "analyze_jobs": len(state.get("scored_jobs", [])) + len(state.get("discarded_jobs", [])),
+                "store_results": state.get("stored_count", 0),
+            },
         },
         "token_usage": usage_tracker.snapshot(),
         "errors": list(state.get("errors", [])),
         "scored_jobs": list(state.get("scored_jobs", [])),
+        "discarded_jobs": list(state.get("discarded_jobs", [])),
     }
 
 
-# Per-graph-build node-status accumulator. Reset by ``build_graph`` so each
-# pipeline run starts from a clean slate; the wrapper mutates it in place as
-# nodes complete.
+# Per-graph-build accumulators. Reset by ``build_graph`` each run.
 _node_status: dict[str, str] = {}
+_node_start_times: dict[str, float] = {}   # Unix timestamp when node started
+_node_end_times: dict[str, float] = {}     # Unix timestamp when node finished
 
 
 # ── Safety wrapper ───────────────────────────────────────────────────────────
@@ -127,6 +147,7 @@ def _safe(node_fn, name: str):
     def wrapper(state: AgentState) -> AgentState:
         usage_tracker.set_node(name)
         _node_status[name] = "running"
+        _node_start_times[name] = time.time()
         # Push the "running" snapshot before the node executes so the live page
         # sees the transition immediately, not just at completion.
         _push_live_snapshot(state, name, status="running")
@@ -140,6 +161,7 @@ def _safe(node_fn, name: str):
             # under mypy. Cast back so the wrapper signature stays honest.
             crashed: AgentState = {**state, "errors": errors}  # type: ignore[typeddict-item]
             _node_status[name] = "error"
+            _node_end_times[name] = time.time()
             _push_live_snapshot(crashed, name, status="running")
             return crashed
         finally:
@@ -148,6 +170,7 @@ def _safe(node_fn, name: str):
         # Successful completion: mark done unless the node itself appended
         # a new error (partial failure). The completed snapshot includes the
         # node's own state mutations so the live page reflects fresh KPIs.
+        _node_end_times[name] = time.time()
         merged = {**state, **result}
         prev_err = len(state.get("errors", []))
         new_err = len(merged.get("errors", []))
@@ -201,6 +224,8 @@ def build_graph() -> CompiledStateGraph:
     # from a clean slate each run; otherwise re-running ``main()`` in a test
     # would inherit "complete" markers from the previous run.
     _node_status.clear()
+    _node_start_times.clear()
+    _node_end_times.clear()
     for _n in _NODE_ORDER:
         _node_status[_n] = "waiting"
 

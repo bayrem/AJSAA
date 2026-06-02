@@ -55,39 +55,42 @@ class TestScoreJobsBatch:
     def test_passing_jobs_returned(self):
         llm = _make_llm('[{"job_index": 0, "best_cv": "cv1", "score": 85, "recommendation": "APPLY", "reasoning": "strong"}]')
         jobs = [_make_job()]
-        result = score_jobs_batch(llm, jobs, [{"name": "cv1", "content": "PM"}], {"min_score": 70})
-        assert len(result) == 1
-        assert result[0]["score"] == 85
+        passed, discarded = score_jobs_batch(llm, jobs, [{"name": "cv1", "content": "PM"}], {"min_score": 70})
+        assert len(passed) == 1
+        assert passed[0]["score"] == 85
+        assert discarded == []
 
-    def test_below_threshold_filtered(self):
+    def test_below_threshold_goes_to_discarded(self):
         llm = _make_llm('[{"job_index": 0, "best_cv": "cv1", "score": 60, "recommendation": "SKIP", "reasoning": "weak"}]')
         jobs = [_make_job()]
-        result = score_jobs_batch(llm, jobs, [{"name": "cv1", "content": "PM"}], {"min_score": 70})
-        assert result == []
+        passed, discarded = score_jobs_batch(llm, jobs, [{"name": "cv1", "content": "PM"}], {"min_score": 70})
+        assert passed == []
+        assert len(discarded) == 1
+        assert discarded[0]["score"] == 60
 
     def test_score_capped_at_max(self):
         llm = _make_llm('[{"job_index": 0, "best_cv": "cv1", "score": 99, "recommendation": "APPLY", "reasoning": "great"}]')
         jobs = [_make_job()]
-        result = score_jobs_batch(llm, jobs, [{"name": "cv1", "content": "PM"}], {"min_score": 70, "max_score": 95})
-        assert result[0]["score"] == 95
+        passed, _ = score_jobs_batch(llm, jobs, [{"name": "cv1", "content": "PM"}], {"min_score": 70, "max_score": 95})
+        assert passed[0]["score"] == 95
 
     def test_float_score_accepted(self):
         llm = _make_llm('[{"job_index": 0, "best_cv": "cv1", "score": 82.5, "recommendation": "APPLY", "reasoning": "good"}]')
         jobs = [_make_job()]
-        result = score_jobs_batch(llm, jobs, [{"name": "cv1", "content": "PM"}], {"min_score": 70})
-        assert result[0]["score"] == 82
+        passed, _ = score_jobs_batch(llm, jobs, [{"name": "cv1", "content": "PM"}], {"min_score": 70})
+        assert passed[0]["score"] == 82
 
     def test_negative_index_ignored(self):
         llm = _make_llm('[{"job_index": -1, "best_cv": "cv1", "score": 90, "recommendation": "APPLY", "reasoning": "x"}]')
         jobs = [_make_job()]
-        result = score_jobs_batch(llm, jobs, [{"name": "cv1", "content": "PM"}], {"min_score": 70})
-        assert result == []
+        passed, discarded = score_jobs_batch(llm, jobs, [{"name": "cv1", "content": "PM"}], {"min_score": 70})
+        assert passed == [] and discarded == []
 
     def test_out_of_bounds_index_ignored(self):
         llm = _make_llm('[{"job_index": 5, "best_cv": "cv1", "score": 90, "recommendation": "APPLY", "reasoning": "x"}]')
         jobs = [_make_job()]
-        result = score_jobs_batch(llm, jobs, [{"name": "cv1", "content": "PM"}], {"min_score": 70})
-        assert result == []
+        passed, discarded = score_jobs_batch(llm, jobs, [{"name": "cv1", "content": "PM"}], {"min_score": 70})
+        assert passed == [] and discarded == []
 
     def test_single_call_for_all_jobs(self):
         """All jobs (regardless of count) should produce exactly 1 LLM call on success."""
@@ -99,8 +102,8 @@ class TestScoreJobsBatch:
     def test_malformed_llm_response_does_not_crash(self):
         llm = _make_llm("not valid json {{{{")
         jobs = [_make_job()]
-        result = score_jobs_batch(llm, jobs, [{"name": "cv1", "content": "PM"}], {"min_score": 70})
-        assert result == []
+        passed, discarded = score_jobs_batch(llm, jobs, [{"name": "cv1", "content": "PM"}], {"min_score": 70})
+        assert passed == [] and discarded == []
 
     def test_system_message_sent_before_human_message(self):
         """score_jobs_batch must include a SystemMessage as the first message."""
@@ -138,8 +141,8 @@ class TestProseDetection:
             MagicMock(content="Here are my scoring thoughts..."),
             MagicMock(content="[]"),
         ]
-        result = score_jobs_batch(llm, [_make_job()], [{"name": "cv1", "content": "PM"}], {"min_score": 70})
-        assert result == []
+        passed, discarded = score_jobs_batch(llm, [_make_job()], [{"name": "cv1", "content": "PM"}], {"min_score": 70})
+        assert passed == [] and discarded == []
         assert llm.invoke.call_count == 2
 
 

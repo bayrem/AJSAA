@@ -8,6 +8,7 @@ Responsibilities:
   - Capture and persist ``sheet_url`` to ``.data/meta.json`` so notifications
     sent on later runs can still link to the most recent sheet.
 """
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +24,30 @@ logger = logging.getLogger(__name__)
 # test_notification.py and the notification node can reference them even when
 # the current run produced none.
 _META_CACHE = JsonCache(Path(".data/meta.json"))
+_DISCARDED_STORE = Path(".data/discarded_jobs.jsonl")
+
+
+def _store_discarded(jobs: list[dict], run_timestamp: str) -> None:
+    """Append new discarded jobs to .data/discarded_jobs.jsonl, deduped by URL."""
+    _DISCARDED_STORE.parent.mkdir(parents=True, exist_ok=True)
+    existing_urls: set[str] = set()
+    if _DISCARDED_STORE.exists():
+        with _DISCARDED_STORE.open(encoding="utf-8") as f:
+            for line in f:
+                try:
+                    existing_urls.add(json.loads(line).get("url", ""))
+                except json.JSONDecodeError:
+                    pass
+    new_lines = []
+    for job in jobs:
+        if job.get("url", "") not in existing_urls:
+            job.setdefault("date_found", run_timestamp)
+            job["status"] = "discarded"
+            new_lines.append(json.dumps(job, ensure_ascii=False))
+    if new_lines:
+        with _DISCARDED_STORE.open("a", encoding="utf-8") as f:
+            f.write("\n".join(new_lines) + "\n")
+        logger.info("Stored %d new discarded jobs", len(new_lines))
 
 
 def _update_meta(updates: dict) -> None:
@@ -39,6 +64,13 @@ def run(state: AgentState) -> AgentState:
     run_log = list(state.get("run_log", []))
 
     scored_jobs = state.get("scored_jobs", [])
+    discarded_jobs = state.get("discarded_jobs", [])
+
+    # Persist discarded jobs to a flat JSONL so they survive across runs and
+    # can be reviewed in the dashboard. Append-only with URL-based dedup.
+    if discarded_jobs:
+        _store_discarded(discarded_jobs, state.get("timestamp", ""))
+
     if not scored_jobs:
         run_log.append("No scored jobs to store")
         return {**state, "stored_count": 0, "errors": errors, "run_log": run_log}

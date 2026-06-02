@@ -41,14 +41,17 @@ logger = logging.getLogger(__name__)
 _EMPTY_STATE: dict = {
     "run_id": "—",
     "timestamp": "",
+    "run_start_time": None,      # Unix timestamp — JS uses this for the live duration counter
     "status": "running",
     "current_node": None,
     "node_status": {},
     "node_timings": {},
+    "node_start_times": {},      # Unix timestamps — JS uses these for per-node live timers
     "kpis": {},
     "token_usage": {},
     "errors": [],
     "scored_jobs": [],
+    "discarded_jobs": [],
 }
 
 
