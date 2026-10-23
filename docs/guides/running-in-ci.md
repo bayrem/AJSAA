@@ -1,21 +1,22 @@
 # Running in CI / Headless Mode
 
-The default `claude_code_agent` provider invokes the local Claude CLI and requires an active desktop session. In GitHub Actions or any headless environment, switch to the direct Anthropic API provider.
+The default `claude_agent_sdk` provider bills your Claude subscription through a logged-in `claude` session, which a CI runner doesn't have. In GitHub Actions or any headless environment, keep the same provider and switch it to API billing. The Agent SDK ships its own Claude Code binary, so nothing else needs installing.
 
 ## Config change
 
-The only required change is `llm.provider`:
+The only required change is `llm.billing`:
 
 ```yaml
 # config.yaml (or a config.ci.yaml passed via --config flag)
 llm:
-  provider: anthropic            # direct API — no CLI needed
+  provider: claude_agent_sdk
+  billing: api                   # bills the Anthropic API via AJSAA_ANTHROPIC_API_KEY
   scoring_model: claude-sonnet-4-6
   search_model: claude-haiku-4-5-20251001
   default_model: claude-haiku-4-5-20251001
-  max_tokens: 4096
-  temperature: 0
 ```
+
+Don't use `provider: anthropic` for full runs: the plain LangChain provider has no web search tool, so the `anthropic_web` connector would return nothing.
 
 ## GitHub Actions workflow
 
@@ -45,7 +46,7 @@ jobs:
 
       - name: Run AJSAA
         env:
-          ANTHROPIC_API_KEY:             ${{ secrets.ANTHROPIC_API_KEY }}
+          AJSAA_ANTHROPIC_API_KEY:       ${{ secrets.AJSAA_ANTHROPIC_API_KEY }}
           FRANCE_TRAVAIL_CLIENT_ID:      ${{ secrets.FRANCE_TRAVAIL_CLIENT_ID }}
           FRANCE_TRAVAIL_CLIENT_SECRET:  ${{ secrets.FRANCE_TRAVAIL_CLIENT_SECRET }}
           ADZUNA_APP_ID:                 ${{ secrets.ADZUNA_APP_ID }}
@@ -61,7 +62,7 @@ Add these under **Settings → Secrets and variables → Actions**:
 
 | Secret | Value |
 |---|---|
-| `ANTHROPIC_API_KEY` | Your Anthropic API key |
+| `AJSAA_ANTHROPIC_API_KEY` | Your Anthropic API key (non-default name: see design decisions) |
 | `FRANCE_TRAVAIL_CLIENT_ID` | France Travail OAuth2 client ID |
 | `FRANCE_TRAVAIL_CLIENT_SECRET` | France Travail OAuth2 client secret |
 | `ADZUNA_APP_ID` | Adzuna app ID |

@@ -9,25 +9,9 @@ import logging
 from pathlib import Path
 
 from agent.state import AgentState
+from agent.tools.cv import pdf_to_markdown as _pdf_to_markdown  # logic moved to the v3 CV tool
 
 logger = logging.getLogger(__name__)
-
-
-def _pdf_to_markdown(pdf_path: str) -> str:
-    """Extract text from a PDF, one page per block."""
-    # Imported lazily so users who never use PDF CVs don't load pypdf.
-    from pypdf import PdfReader
-
-    reader = PdfReader(pdf_path)
-    pages = []
-    for i, page in enumerate(reader.pages):
-        text = page.extract_text() or ""
-        if text.strip():
-            # Comment marker preserves the page boundary in the output so
-            # downstream scoring can still see logical sections even after
-            # tables/columns get flattened.
-            pages.append(f"<!-- page {i + 1} -->\n{text.strip()}")
-    return "\n\n".join(pages)
 
 
 def run(state: AgentState) -> AgentState:

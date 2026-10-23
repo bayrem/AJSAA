@@ -41,21 +41,26 @@ The trade-off: a malformed LLM response drops the entire batch. The implementati
 
 ---
 
-## Why `claude_code_agent` as the default LLM provider?
+## Why `claude_agent_sdk` as the default LLM provider?
 
-Running against the Anthropic API burns API credit on every development run. `claude_code_agent` routes LLM calls through the local Claude CLI, which runs against a Claude Pro subscription at zero marginal cost per call.
+Running against the Anthropic API burns API credit on every development run, so AJSAA defaults to subscription billing. Originally `claude_code_agent` did this by shelling out to `claude -p`. It is replaced by `claude_agent_sdk`, which runs the same Claude Code engine as a Python library. That gives typed results, real system prompts, a tool allow-list (the CLI path granted every tool via `--dangerously-skip-permissions`) and per-model cost reporting.
 
-The provider implements LangChain's `BaseChatModel`, so the rest of the codebase is unaware of the difference. Switching to the direct API for production or CI requires only one config line:
+Billing is a config switch, not a separate provider. The Agent SDK authenticates with the logged-in CLI session, or with an API key when one is passed:
 
 ```yaml
-# Development — uses Claude CLI / Pro subscription
 llm:
-  provider: claude_code_agent
-
-# Production / CI — uses Anthropic API key
-llm:
-  provider: anthropic
+  provider: claude_agent_sdk
+  billing: subscription   # Claude Pro/Max via `claude /login`
+  # billing: api          # Anthropic API via AJSAA_ANTHROPIC_API_KEY
 ```
+
+Non-obvious constraints:
+
+- **Explicit key name.** The SDK subprocess inherits the parent environment. A plain `ANTHROPIC_API_KEY` from Infisical would silently flip subscription runs to API billing, so the key lives under `AJSAA_ANTHROPIC_API_KEY` and is only passed through in `api` mode.
+- **Strict MCP isolation.** On a subscription login the SDK loads every claude.ai connector unless `strict_mcp_config=True`. Measured: ~51k extra cached tokens per Sonnet call (scoring 4 jobs: $0.363 → $0.038 after the fix).
+- **Terms.** Anthropic does not allow third-party products to offer claude.ai login on the Agent SDK. Personal use on your own machine is equivalent to running `claude -p`; any shared deployment must use `billing: api`.
+
+The provider still implements LangChain's `BaseChatModel`, so the v2 nodes and scorer are unaware of the change. The `anthropic` provider (plain `ChatAnthropic`) has no web search tool, so `anthropic_web` returns nothing useful on it. Use `claude_agent_sdk` with `billing: api` instead.
 
 ---
 

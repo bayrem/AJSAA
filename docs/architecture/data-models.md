@@ -127,7 +127,8 @@ The profile is invalidated (and re-bootstrapped on next run) when the CV content
 
 | Variable | Required when | Purpose |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | `llm.provider: anthropic` | Claude API access |
+| `AJSAA_ANTHROPIC_API_KEY` | `llm.provider: claude_agent_sdk` with `llm.billing: api` | Claude API access via the Agent SDK |
+| `ANTHROPIC_API_KEY` | `llm.provider: anthropic` | Claude API access (LangChain provider, no web search) |
 | `OPENAI_API_KEY` | `llm.provider: openai` | OpenAI API access |
 | `FRANCE_TRAVAIL_CLIENT_ID` | connector `france_travail` enabled | OAuth2 client ID |
 | `FRANCE_TRAVAIL_CLIENT_SECRET` | connector `france_travail` enabled | OAuth2 client secret |
