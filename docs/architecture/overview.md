@@ -82,7 +82,7 @@ The four provider domains:
 
 | Domain | Interface | Implementations |
 |---|---|---|
-| LLM | `BaseChatModel` (LangChain) | `anthropic`, `openai`, `claude_code_agent` |
+| LLM | `BaseChatModel` (LangChain) | `claude_agent_sdk`, `claude_code_agent` (legacy), `anthropic`, `openai` |
 | Search | `BaseSearchProvider` | `france_travail`, `adzuna`, `anthropic_web`, … |
 | Storage | `BaseStorageProvider` | `local`, `google_drive`, `onedrive`, `dropbox` |
 | Notifications | `BaseNotifier` | `telegram`, `email`, `slack`, `whatsapp` |

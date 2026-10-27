@@ -21,7 +21,6 @@ Required setup:
 """
 import json
 import logging
-import random
 import re
 import shutil
 import subprocess
@@ -34,6 +33,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 
 from providers.llm import usage_tracker
 from providers.llm.base import BaseLLMProvider
+from providers.llm.retry import AUTH_ERROR_HINTS, BACKOFF_SECONDS, backoff_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -43,24 +43,11 @@ logger = logging.getLogger(__name__)
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
-# Per-attempt backoff schedule (seconds). Index 0 = wait before attempt 2,
-# index 1 = wait before attempt 3, etc. Tuned to the ~65s recovery window
-# observed for the Claude Code subscription's per-minute Sonnet rate limit
-# in issue #58 — three retries (5 + 15 + 45 = 65s) cover the worst case.
-_BACKOFF_SECONDS = (5.0, 15.0, 45.0)
-_JITTER_PCT = 0.2  # ±20% on each delay to avoid synchronised retry storms
-
-# Substrings (case-insensitive) we look for in CLI error messages to decide
-# whether to keep retrying. Auth errors are permanent — no point burning the
-# retry budget. Other errors are treated as transient by default.
-_AUTH_ERROR_HINTS = (
-    "authentication",
-    "unauthorized",
-    "invalid api key",
-    "auth_",
-    "login required",
-    "not logged in",
-)
+# Retry policy lives in providers/llm/retry.py so the Agent SDK provider can
+# share it. Private aliases keep this module's existing names (and tests) stable.
+_BACKOFF_SECONDS = BACKOFF_SECONDS
+_AUTH_ERROR_HINTS = AUTH_ERROR_HINTS
+_backoff_seconds = backoff_seconds
 
 
 def _sanitise(text: str, max_chars: int = 2000) -> str:
@@ -121,22 +108,6 @@ class ClaudeCodeChatModel(BaseChatModel):
                 # "human" is the common case — no header needed
                 parts.append(content)
         return "\n\n".join(parts)
-
-
-def _backoff_seconds(attempt: int) -> float:
-    """Return seconds to sleep before the given attempt (1-indexed).
-
-    Attempt 1 has no wait. Attempts 2+ pull from ``_BACKOFF_SECONDS`` with
-    ±20% jitter. Attempts beyond the schedule reuse the last entry. Returns
-    0 for attempt 1 so callers can use a uniform ``if wait > 0: sleep(wait)``
-    pattern.
-    """
-    if attempt <= 1:
-        return 0.0
-    idx = min(attempt - 2, len(_BACKOFF_SECONDS) - 1)
-    base = _BACKOFF_SECONDS[idx]
-    jitter = base * _JITTER_PCT
-    return base + random.uniform(-jitter, jitter)
 
 
 def _parse_cli_response(

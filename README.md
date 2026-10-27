@@ -64,6 +64,7 @@ python3 -m venv .venv
 # Then add secrets to your Infisical project (env: dev):
 #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID — for notifications
 #   TAVILY_API_KEY                        — for URL validation and extraction (required)
+#   AJSAA_ANTHROPIC_API_KEY               — only when llm.billing: api (see "LLM billing" below)
 #   FRANCE_TRAVAIL_CLIENT_ID/SECRET       — optional free job board API
 #   ADZUNA_APP_ID/KEY                     — optional free job board API
 #   LINKEDIN_EMAIL, LINKEDIN_PASSWORD     — for LinkedIn connector (unofficial API)
@@ -97,7 +98,8 @@ Configuration is split across three files in the `config/` folder:
 
 ```yaml
 llm:
-  provider: claude_code_agent   # anthropic | openai | claude_code_agent
+  provider: claude_agent_sdk    # claude_agent_sdk | claude_code_agent (legacy) | anthropic | openai
+  billing: subscription         # subscription | api
 
 search:
   connectors:
@@ -154,6 +156,30 @@ scoring:
   min_score: 70                  # jobs below this are discarded (0–95 scale)
 ```
 
+### LLM billing
+
+The default `claude_agent_sdk` provider runs every LLM call through the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview). `llm.billing` picks who pays:
+
+| `llm.billing` | Billed to | Needs |
+|---|---|---|
+| `subscription` (default) | Your Claude Pro/Max plan | A logged-in `claude` CLI (`claude /login`) |
+| `api` | Anthropic API, pay-per-token | `AJSAA_ANTHROPIC_API_KEY` in Infisical |
+
+The API key uses a non-default secret name on purpose. The SDK inherits the parent environment, so a plain `ANTHROPIC_API_KEY` injected by Infisical would silently switch subscription runs to API billing. In `subscription` mode the provider blanks `ANTHROPIC_API_KEY` for SDK calls and logs a warning if one is set.
+
+Pipeline calls are isolated from your personal Claude Code setup: no `~/.claude` settings, CLAUDE.md, hooks, skills or claude.ai connectors are loaded. Search calls may use only `WebSearch`/`WebFetch`, and every other call gets no tools. Loading the connectors would add ~51k tokens to every Sonnet call (~10× the cost).
+
+## v3 migration (in progress)
+
+AJSAA is moving from the LangGraph pipeline to a hub-and-spoke agent: an orchestrator that delegates to search and scoring subagents and Python tools. Milestone M1 adds the tools layer. `python run.py` is unchanged; to exercise the new tools directly:
+
+```bash
+infisical run --env=dev -- python scripts/run_tools.py              # CV → web search → validate → ATS → score
+infisical run --env=dev -- python scripts/run_tools.py --skip-web   # ATS boards only
+```
+
+Each run writes to `.data/runs/<run_id>/` (`cvs/`, `candidates.jsonl`, `scored.jsonl`, `discarded.jsonl`). Tools read and write there and return short summaries, so the agent never relays job data itself.
+
 ## Observability
 
 Each run produces:
@@ -203,7 +229,7 @@ Per-model and per-node totals are stored on the final state as `token_usage` (sh
 | Concern | Default |
 |---|---|
 | Orchestration | LangGraph |
-| LLM interface | LangChain (Anthropic Claude / OpenAI) |
+| LLM interface | Claude Agent SDK (via a LangChain `BaseChatModel` shim); Anthropic / OpenAI via LangChain |
 | Search | Claude web search (directive prompt) + Tavily extract (validation + content) |
 | Job boards | France Travail, Adzuna, LinkedIn (unofficial API + MCP browser fallback) |
 | ATS boards | Greenhouse, Lever, Ashby (unauthenticated HTTP) |

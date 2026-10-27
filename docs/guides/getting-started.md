@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Python 3.11+
-- A Claude Pro subscription (for the default `claude_code_agent` provider), **or** an Anthropic API key
+- A Claude Pro/Max subscription with a logged-in `claude` CLI (default `llm.billing: subscription`), **or** an Anthropic API key (`llm.billing: api`)
 
 ## Installation
 
@@ -50,15 +50,16 @@ AJSAA builds a cross-product of positions × locations and writes `query/job_que
 
 **3. Configure the LLM provider**
 
-The default uses the Claude CLI (no API key needed if you have Claude Pro):
+The default runs through the Claude Agent SDK on your Claude subscription (no API key needed):
 
 ```yaml
 # config/config.yaml
 llm:
-  provider: claude_code_agent
+  provider: claude_agent_sdk
+  billing: subscription
 ```
 
-To use the Anthropic API directly, set `provider: anthropic` and add `ANTHROPIC_API_KEY` to your Infisical secrets.
+To bill the Anthropic API instead, set `billing: api` and add `AJSAA_ANTHROPIC_API_KEY` to your Infisical secrets. Use that name, not `ANTHROPIC_API_KEY`: see [design decisions](../architecture/design-decisions.md) for why.
 
 **4. Configure notifications**
 

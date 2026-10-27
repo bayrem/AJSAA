@@ -1,6 +1,7 @@
 # Secrets & environment
 .env
 .infisical.json
+.infisical.yaml
 
 # Runtime data (hidden working dirs — never commit)
 .data/

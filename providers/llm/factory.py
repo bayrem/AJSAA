@@ -2,7 +2,7 @@
 
 Two pieces of state are resolved here:
 
-  1. **Provider**  — anthropic / openai / claude_code_agent. Selected via
+  1. **Provider**  — anthropic / openai / claude_agent_sdk / claude_code_agent. Selected via
      ``cfg["provider"]``; defaults to anthropic.
   2. **Model**     — task-aware. Different tasks have different cost vs.
      quality trade-offs; the factory routes:
@@ -57,11 +57,15 @@ def build_llm(cfg: dict, task: str = "default"):
     elif provider == "openai":
         from providers.llm.openai_provider import OpenAIProvider
         return OpenAIProvider(resolved_cfg).build()
+    elif provider == "claude_agent_sdk":
+        from providers.llm.claude_agent_sdk_provider import ClaudeAgentSDKProvider
+        return ClaudeAgentSDKProvider(resolved_cfg).build()
     elif provider == "claude_code_agent":
+        # Legacy `claude -p` subprocess path — kept as a fallback until M2.
         from providers.llm.claude_code_provider import ClaudeCodeProvider
         return ClaudeCodeProvider(resolved_cfg).build()
     else:
         raise ValueError(
             f"Unknown LLM provider: '{provider}'. "
-            "Supported: anthropic, openai, claude_code_agent"
+            "Supported: anthropic, openai, claude_agent_sdk, claude_code_agent"
         )
